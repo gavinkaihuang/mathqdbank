@@ -1,0 +1,1 @@
+"""MathQBank application package."""
