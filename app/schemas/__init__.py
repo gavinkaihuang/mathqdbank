@@ -14,6 +14,7 @@ from app.schemas.domain import (
 	TagResponse,
 	TagUpdate,
 )
+from app.schemas.pagination import PageResponse
 
 __all__ = [
 	"RawPaperBase",
@@ -28,4 +29,5 @@ __all__ = [
 	"TagCreate",
 	"TagUpdate",
 	"TagResponse",
+	"PageResponse",
 ]

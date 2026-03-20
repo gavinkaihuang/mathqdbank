@@ -9,10 +9,11 @@ from app.schemas import (
     RawPaperResponse,
     RawPaperUpdate,
 )
+from app.schemas.pagination import PageResponse
 from app.services import raw_papers as raw_paper_service
 
 
-router = APIRouter(prefix="/api/v1/raw-papers", tags=["raw_papers"])
+router = APIRouter(prefix="/raw-papers", tags=["raw_papers"])
 DbSession = Annotated[Session, Depends(get_db)]
 
 
@@ -21,13 +22,16 @@ def create_raw_paper(payload: RawPaperCreate, db: DbSession) -> RawPaperResponse
     return raw_paper_service.create_raw_paper(db, payload)
 
 
-@router.get("", response_model=list[RawPaperResponse])
+@router.get("", response_model=PageResponse[RawPaperResponse])
 def list_raw_papers(
     db: DbSession,
-    skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=20, ge=1, le=100),
-) -> list[RawPaperResponse]:
-    return raw_paper_service.list_raw_papers(db, skip=skip, limit=limit)
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+) -> PageResponse[RawPaperResponse]:
+    skip = (page - 1) * size
+    items = raw_paper_service.list_raw_papers(db, skip=skip, limit=size)
+    total = raw_paper_service.count_raw_papers(db)
+    return PageResponse(items=items, total=total, page=page, size=size)
 
 
 @router.get("/{raw_paper_id}", response_model=RawPaperResponse)

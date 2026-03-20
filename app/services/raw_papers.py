@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import RawPaper
@@ -38,3 +38,7 @@ def delete_raw_paper(db: Session, raw_paper: RawPaper) -> RawPaper:
     db.delete(raw_paper)
     db.commit()
     return raw_paper
+
+
+def count_raw_papers(db: Session) -> int:
+    return db.execute(select(func.count()).select_from(RawPaper)).scalar_one()

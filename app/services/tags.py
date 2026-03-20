@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Tag
@@ -36,3 +36,7 @@ def delete_tag(db: Session, tag: Tag) -> Tag:
     db.delete(tag)
     db.commit()
     return tag
+
+
+def count_tags(db: Session) -> int:
+    return db.execute(select(func.count()).select_from(Tag)).scalar_one()

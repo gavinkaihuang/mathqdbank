@@ -5,10 +5,11 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.schemas import QuestionCreate, QuestionResponse, QuestionUpdate
+from app.schemas.pagination import PageResponse
 from app.services import questions as question_service
 
 
-router = APIRouter(prefix="/api/v1/questions", tags=["questions"])
+router = APIRouter(prefix="/questions", tags=["questions"])
 DbSession = Annotated[Session, Depends(get_db)]
 
 
@@ -18,30 +19,32 @@ def create_question(payload: QuestionCreate, db: DbSession) -> QuestionResponse:
     return question_service.get_question(db, question.id) or question
 
 
-@router.get("", response_model=list[QuestionResponse])
+@router.get("", response_model=PageResponse[QuestionResponse])
 def list_questions(
     db: DbSession,
-    skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=20, ge=1, le=100),
-) -> list[QuestionResponse]:
-    return question_service.list_questions(db, skip=skip, limit=limit)
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+) -> PageResponse[QuestionResponse]:
+    skip = (page - 1) * size
+    items = question_service.list_questions(db, skip=skip, limit=size)
+    total = question_service.count_questions(db)
+    return PageResponse(items=items, total=total, page=page, size=size)
 
 
-@router.get("/search", response_model=list[QuestionResponse])
+@router.get("/search", response_model=PageResponse[QuestionResponse])
 def search_questions(
     db: DbSession,
-    skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=20, ge=1, le=100),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
     tag_name: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
-) -> list[QuestionResponse]:
-    return question_service.search_questions(
-        db,
-        skip=skip,
-        limit=limit,
-        tag_name=tag_name,
-        status=status_filter,
+) -> PageResponse[QuestionResponse]:
+    skip = (page - 1) * size
+    items = question_service.search_questions(
+        db, skip=skip, limit=size, tag_name=tag_name, status=status_filter
     )
+    total = question_service.count_questions(db, tag_name=tag_name, status=status_filter)
+    return PageResponse(items=items, total=total, page=page, size=size)
 
 
 @router.get("/{question_id}", response_model=QuestionResponse)

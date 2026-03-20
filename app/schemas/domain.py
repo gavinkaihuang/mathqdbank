@@ -62,6 +62,7 @@ class QuestionBase(BaseModel):
 
 class QuestionCreate(QuestionBase):
     raw_paper_id: int
+    tag_ids: list[int] = Field(default_factory=list)
 
 
 class QuestionUpdate(BaseModel):
@@ -73,6 +74,7 @@ class QuestionUpdate(BaseModel):
     difficulty: float | None = None
     elo_anchor: int | None = None
     status: str | None = None
+    tag_ids: list[int] | None = None
 
 
 class QuestionResponse(QuestionBase):

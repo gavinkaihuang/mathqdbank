@@ -1,12 +1,28 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import Question, Tag
 from app.schemas import QuestionCreate, QuestionUpdate
 
 
+def _resolve_tags(db: Session, tag_ids: list[int]) -> list[Tag]:
+    """Fetch Tag objects for the given ids; raises BadRequestError on missing ids."""
+    from app.core.exceptions import BadRequestError
+
+    if not tag_ids:
+        return []
+    tags = list(db.execute(select(Tag).where(Tag.id.in_(tag_ids))).scalars().all())
+    if len(tags) != len(set(tag_ids)):
+        found = {t.id for t in tags}
+        missing = sorted(set(tag_ids) - found)
+        raise BadRequestError(f"Tag id(s) not found: {missing}")
+    return tags
+
+
 def create_question(db: Session, payload: QuestionCreate) -> Question:
-    question = Question(**payload.model_dump())
+    data = payload.model_dump(exclude={"tag_ids"})
+    question = Question(**data)
+    question.tags = _resolve_tags(db, payload.tag_ids)
     db.add(question)
     db.commit()
     db.refresh(question)
@@ -52,8 +68,12 @@ def get_question(db: Session, question_id: int) -> Question | None:
 
 
 def update_question(db: Session, question: Question, payload: QuestionUpdate) -> Question:
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True, exclude={"tag_ids"})
+    for field, value in data.items():
         setattr(question, field, value)
+
+    if payload.tag_ids is not None:
+        question.tags = _resolve_tags(db, payload.tag_ids)
 
     db.add(question)
     db.commit()
@@ -65,3 +85,16 @@ def delete_question(db: Session, question: Question) -> Question:
     db.delete(question)
     db.commit()
     return question
+
+
+def count_questions(
+    db: Session,
+    tag_name: str | None = None,
+    status: str | None = None,
+) -> int:
+    stmt = select(func.count()).select_from(Question)
+    if tag_name:
+        stmt = stmt.join(Question.tags).where(Tag.name == tag_name)
+    if status:
+        stmt = stmt.where(Question.status == status)
+    return db.execute(stmt).scalar_one()

@@ -32,8 +32,10 @@ MathQBank/
 
 1. 创建并激活 Python 3.13 虚拟环境。
 
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
+```
 
 2. 安装依赖：
 
