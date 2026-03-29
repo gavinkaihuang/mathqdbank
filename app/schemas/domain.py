@@ -1,4 +1,6 @@
 from datetime import datetime
+from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,7 +29,7 @@ class RawPaperBase(BaseModel):
     title: str
     year: int
     paper_type: str | None = None
-    source_url: str | None = None
+    page_urls: list[str] = Field(default_factory=list)
     status: str = "pending"
 
 
@@ -39,7 +41,7 @@ class RawPaperUpdate(BaseModel):
     title: str | None = None
     year: int | None = None
     paper_type: str | None = None
-    source_url: str | None = None
+    page_urls: list[str] | None = None
     status: str | None = None
 
 
@@ -50,8 +52,47 @@ class RawPaperResponse(RawPaperBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PromptTemplateBase(BaseModel):
+    name: str
+    description: str
+    version: str
+    content: str
+    model_routing_key: str
+    is_active: bool = False
+
+
+class PromptTemplateCreate(PromptTemplateBase):
+    pass
+
+
+class PromptTemplateUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    version: str | None = None
+    content: str | None = None
+    model_routing_key: str | None = None
+    is_active: bool | None = None
+
+
+class PromptTemplateResponse(PromptTemplateBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuestionTypeEnum(str, Enum):
+    CHOICE = "choice"
+    FILL = "fill"
+    JUDGE = "judge"
+    ESSAY = "essay"
+
+
 class QuestionBase(BaseModel):
     problem_number: str | None = None
+    question_type: QuestionTypeEnum
+    type_specific_data: dict[str, Any] = Field(default_factory=dict)
     content_latex: str
     answer_latex: str | None = None
     image_url: str | None = None
@@ -68,6 +109,8 @@ class QuestionCreate(QuestionBase):
 class QuestionUpdate(BaseModel):
     raw_paper_id: int | None = None
     problem_number: str | None = None
+    question_type: QuestionTypeEnum | None = None
+    type_specific_data: dict[str, Any] | None = None
     content_latex: str | None = None
     answer_latex: str | None = None
     image_url: str | None = None

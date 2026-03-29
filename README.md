@@ -55,6 +55,12 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
+5. 执行数据库迁移：
+
+```bash
+alembic upgrade head
+```
+
 默认访问地址：
 
 - 应用: http://127.0.0.1:8000
@@ -90,3 +96,4 @@ docker run --rm -p 8000:8000 --env-file .env mathqbank:latest
 - 提供基础配置加载
 - 提供 SQLAlchemy 数据库连接初始化
 - 提供健康检查接口 `/ping`
+- 提供 Alembic 数据库迁移入口

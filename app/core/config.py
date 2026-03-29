@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     APP_NAME: str = "MathQBank"
     DATABASE_URL: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/mathqbank"
+    MODEL_TIER_FLASH: str = "gemini-1.5-flash"
+    MODEL_TIER_PRO: str = "gemini-1.5-pro"
 
     model_config = SettingsConfigDict(
         env_file=".env",

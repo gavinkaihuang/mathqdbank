@@ -1,11 +1,13 @@
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Float,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Table,
     Text,
@@ -40,7 +42,7 @@ class RawPaper(Base):
     title = Column(String(255), nullable=False, index=True)
     year = Column(Integer, nullable=False)
     paper_type = Column(String(50))
-    source_url = Column(String(500))
+    page_urls = Column(JSON, default=list)
     status = Column(String(50), default="pending")
 
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -56,6 +58,8 @@ class Question(Base):
     id = Column(Integer, primary_key=True, index=True)
     raw_paper_id = Column(Integer, ForeignKey("raw_papers.id", ondelete="CASCADE"))
     problem_number = Column(String(50))
+    question_type = Column(String(50), nullable=False)
+    type_specific_data = Column(JSON, default=dict)
 
     content_latex = Column(Text, nullable=False)
     answer_latex = Column(Text)
@@ -84,3 +88,18 @@ class Tag(Base):
     questions = relationship(
         "Question", secondary=question_tag_association, back_populates="tags"
     )
+
+
+class PromptTemplate(Base):
+    __tablename__ = "prompt_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False, index=True)
+    description = Column(String(500), nullable=False)
+    version = Column(String(50), nullable=False)
+    content = Column(Text, nullable=False)
+    model_routing_key = Column(String(50), nullable=False)
+    is_active = Column(Boolean, default=False, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
