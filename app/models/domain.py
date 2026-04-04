@@ -73,9 +73,24 @@ class Question(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     paper = relationship("RawPaper", back_populates="questions")
+    images = relationship(
+        "QuestionImage", back_populates="question", cascade="all, delete-orphan"
+    )
     tags = relationship(
         "Tag", secondary=question_tag_association, back_populates="questions"
     )
+
+
+class QuestionImage(Base):
+    __tablename__ = "question_images"
+
+    id = Column(Integer, primary_key=True, index=True)
+    question_id = Column(Integer, ForeignKey("questions.id", ondelete="CASCADE"))
+    image_url = Column(String(500), nullable=False)
+    desc = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    question = relationship("Question", back_populates="images")
 
 
 class Tag(Base):
