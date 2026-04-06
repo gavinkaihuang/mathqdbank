@@ -34,6 +34,20 @@ class ConflictError(AppError):
         super().__init__(message=message, code="CONFLICT", http_status=status.HTTP_409_CONFLICT)
 
 
+class KeyRelayException(AppError):
+    def __init__(
+        self,
+        code: str | None = "KEY_RELAY_ERROR",
+        message: str = "Key relay request failed",
+        http_status: int = status.HTTP_502_BAD_GATEWAY,
+    ) -> None:
+        super().__init__(
+            message=message,
+            code=code or "KEY_RELAY_ERROR",
+            http_status=http_status,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

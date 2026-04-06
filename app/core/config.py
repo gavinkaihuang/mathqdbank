@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     MODEL_TIER_FLASH: str = "gemini-1.5-flash"
     MODEL_TIER_PRO: str = "gemini-1.5-pro"
     GEMINI_API_KEY: str = ""
+    KEY_RELAY_BASE_URL: str
+    KEY_RELAY_TOKEN: str
+    PROJECT_NAME: str = "mathqbank"
 
     # MinIO Configuration (loaded from .env)
     MINIO_ENDPOINT: str

@@ -97,3 +97,33 @@ docker run --rm -p 8000:8000 --env-file .env mathqbank:latest
 - 提供 SQLAlchemy 数据库连接初始化
 - 提供健康检查接口 `/ping`
 - 提供 Alembic 数据库迁移入口
+
+
+
+我创建了一个LLM key的分发系统， 具体的调用接口是：
+
+1、获取一个可以使用的Key
+curl -X POST "http://192.168.44.163:3010/api/external/keys/dispatch" \
+  -H "Content-Type: application/json" \
+  -H "X-KeyRelay-Token: 616dfb41-52de-4ef5-b9a1-43c23f100d13" \
+  -d '{
+    "platform": "Gemini",
+    "projectName": "mathqbank"
+  }'
+
+2、如果调用LLM的时候出错，将错误信息提交给系统
+  curl -X POST "http://192.168.44.163:3010/api/keys/callback" \
+    -H "Content-Type: application/json" \
+    -H "x-callback-token: 616dfb41-52de-4ef5-b9a1-43c23f100d13" \
+    -d '{
+      "keyId": "<KEY_ID>",
+      "projectName": "mathqbank",
+      "rawError": "RATE_LIMIT_EXCEEDED"
+    }'
+
+调用信息出错的时候，统一给的信息是：
+{
+  "success": false,
+  "code": "ERROR_CODE",
+  "message": "错误说明"
+}

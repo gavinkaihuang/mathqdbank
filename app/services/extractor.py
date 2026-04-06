@@ -191,3 +191,34 @@ class PaperExtractorService:
                             desc=f"diagram_{i}",
                         )
                     )
+
+
+# Example usage with KeyRelayClient before calling Gemini:
+#
+# async def call_gemini_with_retry(base64_image: str, system_prompt: str) -> dict[str, Any]:
+#     relay_client = KeyRelayClient()
+#     last_error: Exception | None = None
+#
+#     for _ in range(3):
+#         key_payload = await relay_client.get_key(platform="Gemini")
+#         api_key = key_payload.get("key") or key_payload.get("apiKey")
+#         key_id = key_payload["keyId"]
+#         endpoint = (
+#             "https://generativelanguage.googleapis.com/v1beta/models/"
+#             f"{settings.MODEL_TIER_FLASH}:generateContent?key={api_key}"
+#         )
+#
+#         try:
+#             async with httpx.AsyncClient(timeout=90) as client:
+#                 response = await client.post(endpoint, json={...})
+#                 response.raise_for_status()
+#                 return response.json()
+#         except httpx.HTTPStatusError as exc:
+#             if exc.response.status_code == 429:
+#                 await relay_client.report_error(key_id=key_id, raw_error=exc.response.text)
+#                 last_error = exc
+#                 continue
+#             raise
+#
+#     if last_error is not None:
+#         raise last_error
