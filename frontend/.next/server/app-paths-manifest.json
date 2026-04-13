@@ -1,3 +1,5 @@
 {
+  "/api/raw-papers/route": "app/api/raw-papers/route.js",
+  "/page": "app/page.js",
   "/admin/papers/page": "app/admin/papers/page.js"
 }

@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     MODEL_TIER_FLASH: str = "gemini-1.5-flash"
     MODEL_TIER_PRO: str = "gemini-1.5-pro"
     GEMINI_API_KEY: str = ""
+    LLM_DEBUG_ENABLED: bool = False
+    LLM_DEBUG_MAX_TEXT_CHARS: int = 3000
     KEY_RELAY_BASE_URL: str
     KEY_RELAY_TOKEN: str
     PROJECT_NAME: str = "mathqbank"

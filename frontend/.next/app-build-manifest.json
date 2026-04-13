@@ -6,6 +6,11 @@
       "static/css/app/layout.css",
       "static/chunks/app/layout.js"
     ],
+    "/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/page.js"
+    ],
     "/admin/layout": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
@@ -16,25 +21,10 @@
       "static/chunks/main-app.js",
       "static/chunks/app/admin/papers/page.js"
     ],
-    "/admin/bank/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/admin/bank/page.js"
-    ],
     "/api/raw-papers/route": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/api/raw-papers/route.js"
-    ],
-    "/api/raw-papers/upload/route": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/api/raw-papers/upload/route.js"
-    ],
-    "/admin/review/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/admin/review/page.js"
     ]
   }
 }

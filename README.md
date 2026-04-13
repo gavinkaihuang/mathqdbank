@@ -69,11 +69,21 @@ alembic upgrade head
 ## 环境变量
 
 - `DATABASE_URL`: PostgreSQL 连接字符串
+- `LLM_DEBUG_ENABLED`: 是否开启大模型调试日志（true/false）
+- `LLM_DEBUG_MAX_TEXT_CHARS`: 调试日志中响应文本最大长度（超出将截断）
+
+开启后会在服务日志中输出：
+
+- LLM 请求地址（API Key 已脱敏）
+- 请求参数（图片 base64 仅输出长度和预览）
+- 响应状态码与响应体截断内容
 
 示例：
 
 ```env
 DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/mathqbank
+LLM_DEBUG_ENABLED=false
+LLM_DEBUG_MAX_TEXT_CHARS=3000
 ```
 
 ## Docker 运行

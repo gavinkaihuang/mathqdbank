@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+from copy import deepcopy
 from io import BytesIO
 from typing import Any
 
@@ -69,6 +70,7 @@ class PaperExtractorService:
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{settings.MODEL_TIER_FLASH}:generateContent?key={api_key}"
         )
+        endpoint_safe = endpoint.replace(api_key, "***")
 
         payload = {
             "system_instruction": {
@@ -96,7 +98,18 @@ class PaperExtractorService:
             ],
         }
 
+        if settings.LLM_DEBUG_ENABLED:
+            debug_payload = self._sanitize_payload_for_log(payload)
+            logger.info("[LLM DEBUG] request endpoint=%s", endpoint_safe)
+            logger.info("[LLM DEBUG] request payload=%s", json.dumps(debug_payload, ensure_ascii=False))
+
         response = requests.post(endpoint, json=payload, timeout=90)
+        if settings.LLM_DEBUG_ENABLED:
+            logger.info("[LLM DEBUG] response status=%s", response.status_code)
+            logger.info(
+                "[LLM DEBUG] response body=%s",
+                self._truncate_text(response.text, settings.LLM_DEBUG_MAX_TEXT_CHARS),
+            )
         response.raise_for_status()
         result = response.json()
 
@@ -110,6 +123,24 @@ class PaperExtractorService:
             raise RuntimeError("LLM response JSON must be a list")
 
         return parsed
+
+    def _sanitize_payload_for_log(self, payload: dict[str, Any]) -> dict[str, Any]:
+        sanitized = deepcopy(payload)
+        try:
+            inline_data = sanitized["contents"][0]["parts"][1]["inline_data"]
+            raw_data = str(inline_data.get("data", ""))
+            inline_data["data"] = {
+                "base64_length": len(raw_data),
+                "base64_preview": self._truncate_text(raw_data, 120),
+            }
+        except (KeyError, IndexError, TypeError):
+            return sanitized
+        return sanitized
+
+    def _truncate_text(self, text: str, max_chars: int) -> str:
+        if len(text) <= max_chars:
+            return text
+        return f"{text[:max_chars]}...(truncated, total={len(text)} chars)"
 
     def crop_and_upload_images(
         self,
