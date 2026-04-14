@@ -109,6 +109,10 @@ docker run --rm -p 8000:8000 --env-file .env mathqbank:latest
 - 提供 Alembic 数据库迁移入口
 
 
+API 文档（Swagger UI）：http://127.0.0.1:8000/docs
+备用文档（ReDoc）：http://127.0.0.1:8000/redoc
+
+
 
 我创建了一个LLM key的分发系统， 具体的调用接口是：
 
