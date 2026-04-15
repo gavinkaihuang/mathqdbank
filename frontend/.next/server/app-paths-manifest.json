@@ -1,6 +1,0 @@
-{
-  "/api/prompts/route": "app/api/prompts/route.js",
-  "/api/prompts/[id]/route": "app/api/prompts/[id]/route.js",
-  "/(admin)/prompts/[id]/page": "app/(admin)/prompts/[id]/page.js",
-  "/(admin)/prompts/page": "app/(admin)/prompts/page.js"
-}
