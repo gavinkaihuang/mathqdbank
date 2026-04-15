@@ -12,14 +12,14 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import PromptTemplate, Question, QuestionImage, RawPaper
-from app.services.storage import MinioClient
+from app.services.minio_service import MinioService
 
 logger = logging.getLogger(__name__)
 
 
 class PaperExtractorService:
     def __init__(self) -> None:
-        self.storage = MinioClient()
+        self.storage = MinioService()
         self.system_prompt = ""
 
     def process_paper(self, paper_id: int, db: Session) -> None:
@@ -173,11 +173,11 @@ class PaperExtractorService:
             cropped = image.crop((left, upper, right, lower))
             cropped_buffer = BytesIO()
             cropped.save(cropped_buffer, format="JPEG", quality=95)
-            cropped_buffer.seek(0)
+            cropped_bytes = cropped_buffer.getvalue()
 
-            uploaded = self.storage.upload_file(
-                file_obj=cropped_buffer,
-                original_filename=f"question_crop_{idx + 1}.jpg",
+            uploaded = self.storage.upload_object(
+                file_data=cropped_bytes,
+                file_name=f"question_crop_{idx + 1}.jpg",
                 content_type="image/jpeg",
             )
             uploaded_urls.append(uploaded)
@@ -185,12 +185,7 @@ class PaperExtractorService:
         return uploaded_urls
 
     def _download_image_bytes(self, object_name: str) -> bytes:
-        response = self.storage.client.get_object(self.storage.bucket_name, object_name)
-        try:
-            return response.read()
-        finally:
-            response.close()
-            response.release_conn()
+        return self.storage.get_object_bytes(object_name)
 
     def _persist_questions(
         self,

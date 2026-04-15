@@ -141,3 +141,35 @@ curl -X POST "http://192.168.44.163:3010/api/external/keys/dispatch" \
   "code": "ERROR_CODE",
   "message": "错误说明"
 }
+
+# 文件上传
+统一上传 API
+
+文件：upload.py
+新增接口：
+POST /api/v1/upload
+
+入参：UploadFile（字段名 file）
+
+返回：{ "code": 200, "data": { "url": "...", "filename": "..." } }
+
+异常处理：
+
+空文件名/空文件：400
+MinIO 配置问题：500
+MinIO 上传失败：502
+其他异常：500
+路由注册
+
+文件：api_router.py
+已注册 upload 路由，统一挂载到 /api/v1 下。
+接口示例
+
+路径：POST /api/v1/upload
+表单字段：file
+成功响应示例：
+{ "code": 200, "data": { "url": "http://192.168.44.130:3008/mathqbank/2026/04/xxxx.pdf", "filename": "xxx.pdf" } }
+
+
+#查看知识图谱
+curl -s http://localhost:8000/api/v1/taxonomy/tree | python3 -m json.tool

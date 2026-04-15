@@ -19,7 +19,7 @@ import {
   ClipboardCheck,
 } from "lucide-react";
 import AIPipelineBoard from "../_components/AIPipelineBoard";
-import ReviewModal from "../_components/ReviewModal";
+import QuestionAuditModal from "../../../components/QuestionAuditModal";
 
 // ── 类型定义 ──────────────────────────────────────────────
 type PaperStatus = "pending" | "processing" | "completed" | "failed";
@@ -134,118 +134,10 @@ function StatusBadge({ status }: { status: PaperStatus }) {
   );
 }
 
-// ── 操作列组件（含 AI 发起按钮 / 审核按钮 / 删除）──────────
-function ActionCell({
-  paper,
-  onTriggerAI,
-  onReview,
-  onDelete,
-}: {
-  paper: RawPaper;
-  onTriggerAI: (id: string) => Promise<void>;
-  onReview: (paper: RawPaper) => void;
-  onDelete: (id: string) => void;
-}) {
-  const [triggering, setTriggering] = useState(false);
-
-  const handleTrigger = async () => {
-    setTriggering(true);
-    try {
-      await onTriggerAI(paper.id);
-    } finally {
-      setTriggering(false);
-    }
-  };
-
-  return (
-    <div className="flex items-center justify-end gap-1">
-      {/* pending → 发起 AI 切题 */}
-      {paper.status === "pending" && (
-        <button
-          type="button"
-          disabled={triggering}
-          onClick={handleTrigger}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-xs font-semibold text-indigo-700
-            hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-          title="发起 AI 自动切题"
-        >
-          {triggering ? (
-            <span className="w-3 h-3 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
-          ) : (
-            <Zap className="h-3.5 w-3.5" />
-          )}
-          {triggering ? "发起中…" : "发起切题"}
-        </button>
-      )}
-
-      {/* failed → 重试按钮 */}
-      {paper.status === "failed" && (
-        <button
-          type="button"
-          disabled={triggering}
-          onClick={handleTrigger}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 border border-red-200 text-xs font-semibold text-red-600
-            hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-          title="重新发起 AI 切题"
-        >
-          {triggering ? (
-            <span className="w-3 h-3 rounded-full border-2 border-red-400 border-t-transparent animate-spin" />
-          ) : (
-            <Zap className="h-3.5 w-3.5" />
-          )}
-          重试切题
-        </button>
-      )}
-
-      {/* completed → 审核题目按钮 */}
-      {paper.status === "completed" && (
-        <button
-          type="button"
-          onClick={() => onReview(paper)}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-50 border border-violet-200 text-xs font-semibold text-violet-700
-            hover:bg-violet-100 transition-all"
-          title="审核切好的题目"
-        >
-          <ClipboardCheck className="h-3.5 w-3.5" />
-          审核题目
-        </button>
-      )}
-
-      {/* processing → 只有查看图标，不可操作 */}
-      {paper.status === "processing" && (
-        <span className="px-3 py-1.5 text-xs text-slate-400 font-medium select-none">
-          处理中…
-        </span>
-      )}
-
-      {/* 查看按钮（通用，processing 时隐藏）*/}
-      {paper.status !== "processing" && (
-        <button
-          type="button"
-          title="查看"
-          className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
-        >
-          <Eye className="h-4 w-4" />
-        </button>
-      )}
-
-      {/* 删除按钮 */}
-      <button
-        type="button"
-        title="删除"
-        onClick={() => onDelete(paper.id)}
-        className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-      >
-        <Trash2 className="h-4 w-4" />
-      </button>
-    </div>
-  );
-}
-
 // ── 主页面 ────────────────────────────────────────────────
 export default function RawPapersPage() {
   const [papers, setPapers] = useState<RawPaper[]>(INITIAL_PAPERS);
-  const [reviewTarget, setReviewTarget] = useState<RawPaper | null>(null);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
 
   // 修改单条试卷状态
   const updateStatus = useCallback((id: string, status: PaperStatus) => {
@@ -407,12 +299,30 @@ export default function RawPapersPage() {
 
                   {/* 操作列 */}
                   <td className="px-6 py-4">
-                    <ActionCell
-                      paper={paper}
-                      onTriggerAI={handleTriggerAI}
-                      onReview={setReviewTarget}
-                      onDelete={handleDelete}
-                    />
+                    <div className="flex items-center justify-end gap-1">
+                      {paper.status === 'pending' && (
+                        <button
+                          type="button"
+                          onClick={() => handleTriggerAI(paper.id)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-xs font-semibold text-blue-700 hover:bg-blue-100 transition-all"
+                          title="发起 AI 自动切题"
+                        >
+                          <Zap className="h-3.5 w-3.5" />
+                          发起切题
+                        </button>
+                      )}
+                      {paper.status === 'completed' && (
+                        <button
+                          type="button"
+                          onClick={() => setShowPreviewModal(true)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-xs font-semibold text-green-700 hover:bg-green-100 transition-all"
+                          title="审核切好的题目"
+                        >
+                          <ClipboardCheck className="h-3.5 w-3.5" />
+                          审核题目
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -437,13 +347,10 @@ export default function RawPapersPage() {
       </div>
 
       {/* ── 题目预览弹窗 ── */}
-      {reviewTarget && (
-        <ReviewModal
-          paperId={reviewTarget.id}
-          paperTitle={reviewTarget.title}
-          onClose={() => setReviewTarget(null)}
-        />
-      )}
+      <QuestionAuditModal
+        isOpen={showPreviewModal}
+        onClose={() => setShowPreviewModal(false)}
+      />
     </div>
   );
 }

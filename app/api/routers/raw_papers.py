@@ -1,4 +1,3 @@
-from io import BytesIO
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -13,8 +12,8 @@ from app.schemas import (
 )
 from app.schemas.pagination import PageResponse
 from app.services.extractor import PaperExtractorService
+from app.services.minio_service import MinioService
 from app.services import raw_papers as raw_paper_service
-from app.services.storage import MinioClient
 
 
 router = APIRouter(prefix="/raw-papers", tags=["raw_papers"])
@@ -81,7 +80,7 @@ async def upload_raw_paper(
     db: DbSession,
     paper_type: Annotated[str | None, Form()] = None,
 ) -> RawPaperResponse:
-    minio_client = MinioClient()
+    minio_service = MinioService()
     uploaded_paths: list[str] = []
 
     try:
@@ -90,12 +89,11 @@ async def upload_raw_paper(
                 continue
 
             file_content = await file.read()
-            file_obj = BytesIO(file_content)
             content_type = file.content_type or "application/octet-stream"
 
-            object_path = minio_client.upload_file(
-                file_obj=file_obj,
-                original_filename=file.filename,
+            object_path = minio_service.upload_object(
+                file_data=file_content,
+                file_name=file.filename,
                 content_type=content_type,
             )
             uploaded_paths.append(object_path)
@@ -114,7 +112,7 @@ async def upload_raw_paper(
         # Best-effort rollback when any upload step fails.
         if uploaded_paths:
             try:
-                minio_client.delete_files(uploaded_paths)
+                minio_service.delete_files(uploaded_paths)
             except Exception:
                 pass
 

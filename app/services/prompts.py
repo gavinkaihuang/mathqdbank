@@ -2,7 +2,56 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import PromptTemplate
+from app.schemas.domain import PromptTemplateCreate, PromptTemplateUpdate
 
+
+# ── CRUD ─────────────────────────────────────────────────────────────────────
+
+def list_prompt_templates(db: Session, skip: int = 0, limit: int = 100) -> list[PromptTemplate]:
+    return list(db.execute(select(PromptTemplate).offset(skip).limit(limit)).scalars().all())
+
+
+def count_prompt_templates(db: Session) -> int:
+    return db.execute(select(PromptTemplate)).scalars().all().__len__()
+
+
+def get_prompt_template(db: Session, prompt_id: int) -> PromptTemplate | None:
+    return db.get(PromptTemplate, prompt_id)
+
+
+def get_prompt_template_by_name(db: Session, name: str) -> PromptTemplate | None:
+    return db.execute(
+        select(PromptTemplate).where(PromptTemplate.name == name)
+    ).scalar_one_or_none()
+
+
+def create_prompt_template(db: Session, payload: PromptTemplateCreate) -> PromptTemplate:
+    template = PromptTemplate(**payload.model_dump())
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+    return template
+
+
+def update_prompt_template(
+    db: Session,
+    template: PromptTemplate,
+    payload: PromptTemplateUpdate,
+) -> PromptTemplate:
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(template, field, value)
+    db.commit()
+    db.refresh(template)
+    return template
+
+
+def delete_prompt_template(db: Session, template: PromptTemplate) -> PromptTemplate:
+    db.delete(template)
+    db.commit()
+    return template
+
+
+# ── Seed ─────────────────────────────────────────────────────────────────────
 
 def init_prompts(db: Session) -> None:
     existing = db.execute(

@@ -11,45 +11,25 @@
       "static/chunks/main-app.js",
       "static/chunks/app/(admin)/layout.js"
     ],
-    "/(admin)/raw-papers/page": [
+    "/(admin)/prompts/[id]/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/(admin)/raw-papers/page.js"
+      "static/chunks/app/(admin)/prompts/[id]/page.js"
     ],
-    "/(admin)/raw-papers/upload/page": [
+    "/api/prompts/route": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/(admin)/raw-papers/upload/page.js"
+      "static/chunks/app/api/prompts/route.js"
     ],
-    "/(admin)/dashboard/page": [
+    "/api/prompts/[id]/route": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/(admin)/dashboard/page.js"
+      "static/chunks/app/api/prompts/[id]/route.js"
     ],
-    "/admin/layout": [
+    "/(admin)/prompts/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/layout.js"
-    ],
-    "/admin/papers/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/admin/papers/page.js"
-    ],
-    "/api/raw-papers/route": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/api/raw-papers/route.js"
-    ],
-    "/admin/review/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/admin/review/page.js"
-    ],
-    "/admin/bank/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/admin/bank/page.js"
+      "static/chunks/app/(admin)/prompts/page.js"
     ]
   }
 }

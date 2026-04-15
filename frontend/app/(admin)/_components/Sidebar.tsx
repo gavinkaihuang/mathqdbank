@@ -12,6 +12,8 @@ import {
   FileText,
   GraduationCap,
   ChevronRight,
+  Library,
+  Terminal,
 } from "lucide-react";
 
 type NavItem = {
@@ -39,7 +41,7 @@ const navSections: NavSection[] = [
     ],
   },
   {
-    sectionLabel: "原卷入库",
+    sectionLabel: "原卷处理",
     items: [
       {
         href: "/raw-papers",
@@ -47,28 +49,50 @@ const navSections: NavSection[] = [
         sublabel: "Raw Papers",
         icon: FileStack,
       },
-    ],
-  },
-  {
-    sectionLabel: "题库工作台",
-    items: [
       {
         href: "/admin/papers",
         label: "试卷控制台",
         sublabel: "Paper Console",
         icon: FileText,
       },
+    ],
+  },
+  {
+    sectionLabel: "质量管控",
+    items: [
       {
         href: "/admin/review",
         label: "AI 校验台",
         sublabel: "AI Review",
         icon: ClipboardCheck,
       },
+    ],
+  },
+  {
+    sectionLabel: "题库管理",
+    items: [
       {
         href: "/admin/bank",
         label: "活水题库",
-        sublabel: "Question Bank",
+        sublabel: "Live Bank",
         icon: Database,
+      },
+      {
+        href: "/questions",
+        label: "题库大厅",
+        sublabel: "Question Bank",
+        icon: Library,
+      },
+    ],
+  },
+  {
+    sectionLabel: "模型配置",
+    items: [
+      {
+        href: "/prompts",
+        label: "提示词管理",
+        sublabel: "Prompt Management",
+        icon: Terminal,
       },
     ],
   },

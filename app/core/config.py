@@ -1,6 +1,7 @@
 from functools import lru_cache
+from urllib.parse import urlparse
 
-from pydantic import ValidationError
+from pydantic import ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +23,31 @@ class Settings(BaseSettings):
     MINIO_SECRET_KEY: str
     MINIO_BUCKET_NAME: str = "mathqbank"
     MINIO_USE_SSL: bool = False
+
+    @field_validator("MINIO_ENDPOINT")
+    @classmethod
+    def validate_minio_endpoint(cls, value: str) -> str:
+        endpoint = value.strip().rstrip("/")
+        if not endpoint:
+            raise ValueError("MINIO_ENDPOINT cannot be empty")
+
+        if endpoint.startswith(("http://", "https://")):
+            parsed = urlparse(endpoint)
+            if not parsed.netloc:
+                raise ValueError("MINIO_ENDPOINT URL must include host:port")
+            return endpoint
+
+        if ":" not in endpoint:
+            raise ValueError("MINIO_ENDPOINT must be host:port or http(s)://host:port")
+        return endpoint
+
+    @field_validator("MINIO_ACCESS_KEY", "MINIO_SECRET_KEY", "MINIO_BUCKET_NAME")
+    @classmethod
+    def validate_non_empty_minio_fields(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("MinIO related settings cannot be empty")
+        return normalized
 
     model_config = SettingsConfigDict(
         env_file=".env",
