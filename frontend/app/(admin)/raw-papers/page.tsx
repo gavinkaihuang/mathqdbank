@@ -4,7 +4,7 @@
 // 集成：AI 切题按钮 + 进度看板 + 题目预览弹窗
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Link from "next/link";
 import {
   Upload,
@@ -32,58 +32,48 @@ interface RawPaper {
   status: PaperStatus;
 }
 
-// ── Mock 初始数据 ──────────────────────────────────────────
-const INITIAL_PAPERS: RawPaper[] = [
-  {
-    id: "rp-001",
-    title: "2024 年高考数学全国甲卷",
-    grade: "高三",
-    uploadAt: "2024-06-08 09:12",
-    status: "completed",
-  },
-  {
-    id: "rp-002",
-    title: "2024 年高考数学全国乙卷",
-    grade: "高三",
-    uploadAt: "2024-06-08 10:05",
-    status: "completed",
-  },
-  {
-    id: "rp-003",
-    title: "2023 年高考数学（新课标 I 卷）",
-    grade: "高三",
-    uploadAt: "2024-05-20 14:30",
-    status: "processing",
-  },
-  {
-    id: "rp-004",
-    title: "2024 年浙江省高考数学卷",
-    grade: "高三",
-    uploadAt: "2024-06-10 08:45",
-    status: "pending",
-  },
-  {
-    id: "rp-005",
-    title: "人教版八年级数学期末模拟卷（上）",
-    grade: "初二",
-    uploadAt: "2024-05-15 11:00",
-    status: "failed",
-  },
-  {
-    id: "rp-006",
-    title: "2024 年七年级数学月考卷（第三次）",
-    grade: "初一",
-    uploadAt: "2024-06-01 16:20",
-    status: "completed",
-  },
-  {
-    id: "rp-007",
-    title: "2024 年高考数学（新课标 II 卷）",
-    grade: "高三",
-    uploadAt: "2024-06-09 09:00",
-    status: "pending",
-  },
-];
+interface BackendRawPaper {
+  id: number;
+  title: string;
+  year: number;
+  paper_type?: string | null;
+  status: string;
+  created_at?: string;
+}
+
+function mapPaperStatus(status: string): PaperStatus {
+  const normalized = status.toLowerCase();
+  if (normalized === "processing") return "processing";
+  if (normalized === "completed" || normalized === "done" || normalized === "extracted") {
+    return "completed";
+  }
+  if (normalized === "failed" || normalized === "error") return "failed";
+  return "pending";
+}
+
+function formatUploadAt(createdAt?: string): string {
+  if (!createdAt) return "-";
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("zh-CN", {
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function toViewPaper(paper: BackendRawPaper): RawPaper {
+  return {
+    id: String(paper.id),
+    title: paper.title,
+    grade: paper.paper_type?.trim() ? paper.paper_type : `${paper.year} 年`,
+    uploadAt: formatUploadAt(paper.created_at),
+    status: mapPaperStatus(paper.status),
+  };
+}
 
 // ── 状态徽章配置 ───────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -109,13 +99,6 @@ const STATUS_CONFIG = {
   },
 } satisfies Record<PaperStatus, { label: string; className: string; icon: React.ElementType }>;
 
-// ── 模拟发起 AI 切题的假请求 ────────────────────────────────
-async function mockTriggerAI(_paperId: string): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  // 模拟偶发失败（约 10% 概率），可按需开启
-  // if (Math.random() < 0.1) throw new Error("模拟请求失败");
-}
-
 // ── 状态徽章组件 ───────────────────────────────────────────
 function StatusBadge({ status }: { status: PaperStatus }) {
   const conf = STATUS_CONFIG[status];
@@ -136,8 +119,34 @@ function StatusBadge({ status }: { status: PaperStatus }) {
 
 // ── 主页面 ────────────────────────────────────────────────
 export default function RawPapersPage() {
-  const [papers, setPapers] = useState<RawPaper[]>(INITIAL_PAPERS);
+  const [papers, setPapers] = useState<RawPaper[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [showPreviewModal, setShowPreviewModal] = useState(false);
+
+  const fetchPapers = useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
+
+    try {
+      const response = await fetch("/api/raw-papers", { method: "GET" });
+      if (!response.ok) {
+        throw new Error("获取试卷列表失败");
+      }
+
+      const data = (await response.json()) as { items?: BackendRawPaper[] };
+      setPapers((data.items ?? []).map(toViewPaper));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "获取试卷列表失败";
+      setLoadError(message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchPapers();
+  }, [fetchPapers]);
 
   // 修改单条试卷状态
   const updateStatus = useCallback((id: string, status: PaperStatus) => {
@@ -149,7 +158,6 @@ export default function RawPapersPage() {
   // 发起 AI 切题：pending / failed → processing
   const handleTriggerAI = useCallback(
     async (id: string) => {
-      await mockTriggerAI(id);
       updateStatus(id, "processing");
     },
     [updateStatus]
@@ -234,6 +242,12 @@ export default function RawPapersPage() {
 
       {/* ── Table ── */}
       <div className="flex-1 px-8 py-6 overflow-auto">
+        {loadError ? (
+          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+            {loadError}
+          </div>
+        ) : null}
+
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -254,6 +268,17 @@ export default function RawPapersPage() {
             </thead>
 
             <tbody className="divide-y divide-slate-50">
+              {loading ? (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="px-6 py-12 text-center text-slate-400 text-sm"
+                  >
+                    试卷加载中...
+                  </td>
+                </tr>
+              ) : null}
+
               {papers.map((paper) => (
                 <tr
                   key={paper.id}
@@ -327,7 +352,7 @@ export default function RawPapersPage() {
                 </tr>
               ))}
 
-              {papers.length === 0 && (
+              {!loading && papers.length === 0 && (
                 <tr>
                   <td
                     colSpan={5}
@@ -341,9 +366,7 @@ export default function RawPapersPage() {
           </table>
         </div>
 
-        <p className="text-xs text-slate-400 mt-3 px-1">
-          共 {papers.length} 份试卷 · 使用 Mock 数据展示
-        </p>
+        <p className="text-xs text-slate-400 mt-3 px-1">共 {papers.length} 份试卷</p>
       </div>
 
       {/* ── 题目预览弹窗 ── */}

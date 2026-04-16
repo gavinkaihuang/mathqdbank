@@ -2,16 +2,15 @@ import base64
 import json
 import logging
 from copy import deepcopy
-from io import BytesIO
 from typing import Any
 
 import requests
-from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import PromptTemplate, Question, QuestionImage, RawPaper
+from app.services.exam_paper_decomposer import ExamPaperDecomposer
 from app.services.minio_service import MinioService
 
 logger = logging.getLogger(__name__)
@@ -20,6 +19,7 @@ logger = logging.getLogger(__name__)
 class PaperExtractorService:
     def __init__(self) -> None:
         self.storage = MinioService()
+        self.decomposer = ExamPaperDecomposer(self.storage)
         self.system_prompt = ""
 
     def process_paper(self, paper_id: int, db: Session) -> None:
@@ -38,17 +38,62 @@ class PaperExtractorService:
 
             all_questions: list[dict[str, Any]] = []
 
-            for page_url in (paper.page_urls or []):
-                image_bytes = self._download_image_bytes(page_url)
-                base64_image = base64.b64encode(image_bytes).decode("utf-8")
+            for page_index, page_url in enumerate((paper.page_urls or []), start=1):
+                try:
+                    image_bytes = self._download_image_bytes(page_url)
+                except Exception:
+                    logger.exception(
+                        "Failed to download page image: paper_id=%s page=%s url=%s",
+                        paper.id,
+                        page_index,
+                        page_url,
+                    )
+                    continue
 
-                page_questions = self.call_llm_vision(base64_image)
-                for question in page_questions:
-                    coords = question.get("diagram_coordinates", [])
-                    image_urls = self.crop_and_upload_images(image_bytes, coords)
-                    question["_cropped_image_urls"] = image_urls
+                try:
+                    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+                    page_questions = self.call_llm_vision(base64_image)
+                except Exception:
+                    logger.exception(
+                        "Failed to parse page by LLM: paper_id=%s page=%s",
+                        paper.id,
+                        page_index,
+                    )
+                    continue
 
-                all_questions.extend(page_questions)
+                for question_index, question in enumerate(page_questions, start=1):
+                    if not isinstance(question, dict):
+                        logger.warning(
+                            "Skip non-dict question payload: paper_id=%s page=%s question=%s",
+                            paper.id,
+                            page_index,
+                            question_index,
+                        )
+                        continue
+
+                    try:
+                        image_urls = self.decomposer.extract_question_crops(
+                            original_image_bytes=image_bytes,
+                            question_payload=question,
+                            crop_prefix=f"paper_{paper.id}_p{page_index}_q{question_index}",
+                        )
+                        question["_cropped_image_urls"] = image_urls
+                    except Exception:
+                        logger.exception(
+                            "Failed to crop question images: paper_id=%s page=%s question=%s",
+                            paper.id,
+                            page_index,
+                            question_index,
+                        )
+                        question["_cropped_image_urls"] = []
+
+                    all_questions.append(question)
+
+            if not all_questions:
+                logger.error("No questions extracted: paper_id=%s", paper.id)
+                paper.status = "error"
+                db.commit()
+                return
 
             self._persist_questions(db, paper, all_questions)
             paper.status = "extracted"
@@ -118,11 +163,34 @@ class PaperExtractorService:
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError(f"Unexpected Gemini response: {result}") from exc
 
-        parsed = json.loads(text)
+        parsed = self._parse_llm_json(text)
         if not isinstance(parsed, list):
             raise RuntimeError("LLM response JSON must be a list")
 
         return parsed
+
+    def _parse_llm_json(self, text: str) -> list[dict[str, Any]]:
+        text = text.strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if len(lines) >= 3:
+                text = "\n".join(lines[1:-1]).strip()
+
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"LLM response is not valid JSON: {exc}") from exc
+
+        if not isinstance(parsed, list):
+            raise RuntimeError("LLM response JSON must be a list")
+
+        normalized: list[dict[str, Any]] = []
+        for item in parsed:
+            if isinstance(item, dict):
+                normalized.append(item)
+            else:
+                logger.warning("Skip non-object JSON item from LLM: item=%s", item)
+        return normalized
 
     def _sanitize_payload_for_log(self, payload: dict[str, Any]) -> dict[str, Any]:
         sanitized = deepcopy(payload)
@@ -142,48 +210,6 @@ class PaperExtractorService:
             return text
         return f"{text[:max_chars]}...(truncated, total={len(text)} chars)"
 
-    def crop_and_upload_images(
-        self,
-        original_image_bytes: bytes,
-        coordinates: list[Any],
-    ) -> list[str]:
-        if not coordinates:
-            return []
-
-        uploaded_urls: list[str] = []
-        image = Image.open(BytesIO(original_image_bytes)).convert("RGB")
-        width, height = image.size
-
-        for idx, item in enumerate(coordinates):
-            box = item
-            if isinstance(item, dict):
-                box = item.get("box_2d")
-            if not isinstance(box, list) or len(box) != 4:
-                continue
-
-            ymin, xmin, ymax, xmax = box
-            left = int(max(0, min(width, (float(xmin) / 1000.0) * width)))
-            upper = int(max(0, min(height, (float(ymin) / 1000.0) * height)))
-            right = int(max(0, min(width, (float(xmax) / 1000.0) * width)))
-            lower = int(max(0, min(height, (float(ymax) / 1000.0) * height)))
-
-            if right <= left or lower <= upper:
-                continue
-
-            cropped = image.crop((left, upper, right, lower))
-            cropped_buffer = BytesIO()
-            cropped.save(cropped_buffer, format="JPEG", quality=95)
-            cropped_bytes = cropped_buffer.getvalue()
-
-            uploaded = self.storage.upload_object(
-                file_data=cropped_bytes,
-                file_name=f"question_crop_{idx + 1}.jpg",
-                content_type="image/jpeg",
-            )
-            uploaded_urls.append(uploaded)
-
-        return uploaded_urls
-
     def _download_image_bytes(self, object_name: str) -> bytes:
         return self.storage.get_object_bytes(object_name)
 
@@ -193,30 +219,43 @@ class PaperExtractorService:
         paper: RawPaper,
         question_payloads: list[dict[str, Any]],
     ) -> None:
-        for payload in question_payloads:
-            question = Question(
-                raw_paper_id=paper.id,
-                problem_number=str(payload.get("problem_number", "")),
-                question_type=str(payload.get("question_type", "essay")),
-                content_latex=str(payload.get("content_latex", "")),
-                type_specific_data=payload.get("type_specific_data", {}),
-                difficulty=float(payload.get("predicted_difficulty", 0.5)),
-                status="pending_review",
-            )
-            db.add(question)
-            db.flush()
+        for index, payload in enumerate(question_payloads, start=1):
+            try:
+                question = Question(
+                    raw_paper_id=paper.id,
+                    problem_number=str(payload.get("problem_number", "")),
+                    question_type=str(payload.get("question_type", "essay")),
+                    content_latex=str(payload.get("content_latex", "")),
+                    type_specific_data=payload.get("type_specific_data", {}),
+                    difficulty=self._safe_float(payload.get("predicted_difficulty", 0.5), 0.5),
+                    status="pending_review",
+                )
+                db.add(question)
+                db.flush()
 
-            cropped_urls = payload.get("_cropped_image_urls", [])
-            if isinstance(cropped_urls, list) and cropped_urls:
-                question.image_url = cropped_urls[0]
-                for i, image_url in enumerate(cropped_urls, start=1):
-                    db.add(
-                        QuestionImage(
-                            question_id=question.id,
-                            image_url=str(image_url),
-                            desc=f"diagram_{i}",
+                cropped_urls = payload.get("_cropped_image_urls", [])
+                if isinstance(cropped_urls, list) and cropped_urls:
+                    question.image_url = str(cropped_urls[0])
+                    for i, image_url in enumerate(cropped_urls, start=1):
+                        db.add(
+                            QuestionImage(
+                                question_id=question.id,
+                                image_url=str(image_url),
+                                desc=f"diagram_{i}",
+                            )
                         )
-                    )
+            except Exception:
+                logger.exception(
+                    "Failed to persist one question payload: paper_id=%s idx=%s",
+                    paper.id,
+                    index,
+                )
+
+    def _safe_float(self, value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
 
 
 # Example usage with KeyRelayClient before calling Gemini:
