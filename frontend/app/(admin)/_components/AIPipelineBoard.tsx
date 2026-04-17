@@ -2,7 +2,7 @@
 // AI 切题任务进度看板 —— 嵌入列表页上方的区域，显示正在处理的试卷
 "use client";
 
-import { Bot, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
+import { Bot, ChevronDown, ChevronUp } from "lucide-react";
 import { useState } from "react";
 
 export interface ProcessingPaper {
@@ -10,27 +10,34 @@ export interface ProcessingPaper {
   title: string;
 }
 
+export interface ProcessingRuntime {
+  paperId: string;
+  step: string;
+  progress: number;
+  message: string;
+  updatedAt: string;
+  questionsDetected: number;
+  imagesCropped: number;
+  llmPageFailures: number;
+}
+
 interface AIPipelineBoardProps {
   processingPapers: ProcessingPaper[];
-  onSimulateComplete: (id: string) => void;
+  runtimeByPaperId: Record<string, ProcessingRuntime | undefined>;
 }
 
 // 单条任务卡片
 function TaskItem({
   paper,
-  onSimulateComplete,
+  runtime,
 }: {
   paper: ProcessingPaper;
-  onSimulateComplete: (id: string) => void;
+  runtime?: ProcessingRuntime;
 }) {
-  const [completing, setCompleting] = useState(false);
-
-  const handleComplete = async () => {
-    setCompleting(true);
-    // 模拟网络延迟
-    await new Promise((r) => setTimeout(r, 800));
-    onSimulateComplete(paper.id);
-  };
+  const heartbeatText = runtime?.updatedAt
+    ? new Date(runtime.updatedAt).toLocaleTimeString("zh-CN", { hour12: false })
+    : "-";
+  const percent = typeof runtime?.progress === "number" ? runtime.progress : null;
 
   return (
     <div className="flex items-center gap-4 py-3">
@@ -51,25 +58,19 @@ function TaskItem({
         </div>
 
         <p className="mt-1 text-[10px] text-slate-400 animate-pulse">
-          AI 正在进行 OCR 识别与智能切题…
+          {runtime?.message || "AI 正在进行 OCR 识别与智能切题…"}
+        </p>
+        <p className="mt-1 text-[10px] text-slate-500">
+          阶段: {runtime?.step || "processing"} · 进度: {percent !== null ? `${percent}%` : "--"} · 最后心跳: {heartbeatText}
+        </p>
+        <p className="mt-1 text-[10px] text-slate-500">
+          识别题目: {runtime?.questionsDetected ?? 0} · 切图数量: {runtime?.imagesCropped ?? 0} · LLM失败页: {runtime?.llmPageFailures ?? 0}
         </p>
       </div>
 
-      {/* 模拟完成按钮 */}
-      <button
-        type="button"
-        disabled={completing}
-        onClick={handleComplete}
-        className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs font-medium text-emerald-700
-          hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-      >
-        {completing ? (
-          <div className="w-3 h-3 rounded-full border-2 border-emerald-400 border-t-transparent animate-spin" />
-        ) : (
-          <CheckCircle2 className="h-3.5 w-3.5" />
-        )}
-        {completing ? "处理中…" : "模拟完成"}
-      </button>
+      <span className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-xs font-medium text-slate-600">
+        后台处理中
+      </span>
     </div>
   );
 }
@@ -77,7 +78,7 @@ function TaskItem({
 // 主看板组件
 export default function AIPipelineBoard({
   processingPapers,
-  onSimulateComplete,
+  runtimeByPaperId,
 }: AIPipelineBoardProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -119,11 +120,7 @@ export default function AIPipelineBoard({
       {!collapsed && (
         <div className="px-5 pb-3 divide-y divide-blue-100">
           {processingPapers.map((paper) => (
-            <TaskItem
-              key={paper.id}
-              paper={paper}
-              onSimulateComplete={onSimulateComplete}
-            />
+            <TaskItem key={paper.id} paper={paper} runtime={runtimeByPaperId[paper.id]} />
           ))}
         </div>
       )}

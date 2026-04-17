@@ -52,6 +52,35 @@ class RawPaperResponse(RawPaperBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class RawPaperQaQuestionItem(BaseModel):
+    id: int
+    problem_number: str | None = None
+    question_type: str
+    image_url: str | None = None
+    crop_urls: list[str] = Field(default_factory=list)
+
+
+class RawPaperQaResponse(RawPaperResponse):
+    original_url: str | None = None
+    original_urls: list[str] = Field(default_factory=list)
+    recognized_count: int = 0
+    questions: list[RawPaperQaQuestionItem] = Field(default_factory=list)
+
+
+class RawPaperRecropRequest(BaseModel):
+    problem_number: str
+    box_2d: list[int] = Field(min_length=4, max_length=4)
+    page_index: int = Field(default=0, ge=0)
+
+
+class RawPaperRecropResponse(BaseModel):
+    paper_id: int
+    question_id: int
+    problem_number: str
+    image_url: str
+    crop_urls: list[str] = Field(default_factory=list)
+
+
 class PromptTemplateBase(BaseModel):
     name: str
     description: str

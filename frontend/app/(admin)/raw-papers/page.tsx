@@ -4,7 +4,7 @@
 // 集成：AI 切题按钮 + 进度看板 + 题目预览弹窗
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import Link from "next/link";
 import {
   Upload,
@@ -19,7 +19,7 @@ import {
   ClipboardCheck,
 } from "lucide-react";
 import AIPipelineBoard from "../_components/AIPipelineBoard";
-import QuestionAuditModal from "../../../components/QuestionAuditModal";
+import type { ProcessingRuntime } from "../_components/AIPipelineBoard";
 
 // ── 类型定义 ──────────────────────────────────────────────
 type PaperStatus = "pending" | "processing" | "completed" | "failed";
@@ -122,10 +122,13 @@ export default function RawPapersPage() {
   const [papers, setPapers] = useState<RawPaper[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [triggeringId, setTriggeringId] = useState<string | null>(null);
+  const [stoppingId, setStoppingId] = useState<string | null>(null);
+  const [runtimeByPaperId, setRuntimeByPaperId] = useState<Record<string, ProcessingRuntime | undefined>>({});
 
   const fetchPapers = useCallback(async () => {
-    setLoading(true);
+    setLoading((prev) => (papers.length === 0 ? true : prev));
     setLoadError("");
 
     try {
@@ -142,7 +145,7 @@ export default function RawPapersPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [papers.length]);
 
   useEffect(() => {
     void fetchPapers();
@@ -158,17 +161,54 @@ export default function RawPapersPage() {
   // 发起 AI 切题：pending / failed → processing
   const handleTriggerAI = useCallback(
     async (id: string) => {
-      updateStatus(id, "processing");
+      setActionError("");
+      setTriggeringId(id);
+      try {
+        const response = await fetch(`/api/raw-papers/${id}/extract`, {
+          method: "POST",
+        });
+        const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        if (!response.ok) {
+          const detail =
+            typeof data.detail === "string" ? data.detail : `发起切题失败 (HTTP ${response.status})`;
+          throw new Error(detail);
+        }
+
+        updateStatus(id, "processing");
+        void fetchPapers();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "发起切题失败";
+        setActionError(message);
+      } finally {
+        setTriggeringId(null);
+      }
     },
-    [updateStatus]
+    [fetchPapers, updateStatus]
   );
 
-  // 模拟 AI 完成（来自任务看板）
-  const handleSimulateComplete = useCallback(
-    (id: string) => {
-      updateStatus(id, "completed");
+  const handleStopAI = useCallback(
+    async (id: string) => {
+      setActionError("");
+      setStoppingId(id);
+      try {
+        const response = await fetch(`/api/raw-papers/${id}/extract/stop`, {
+          method: "POST",
+        });
+        const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        if (!response.ok) {
+          const detail =
+            typeof data.detail === "string" ? data.detail : `停止切题失败 (HTTP ${response.status})`;
+          throw new Error(detail);
+        }
+        void fetchPapers();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "停止切题失败";
+        setActionError(message);
+      } finally {
+        setStoppingId(null);
+      }
     },
-    [updateStatus]
+    [fetchPapers]
   );
 
   // 删除
@@ -177,9 +217,87 @@ export default function RawPapersPage() {
   }, []);
 
   // 正在处理的试卷列表（传给看板）
-  const processingPapers = papers
-    .filter((p) => p.status === "processing")
-    .map((p) => ({ id: p.id, title: p.title }));
+  const processingPapers = useMemo(
+    () =>
+      papers
+        .filter((p) => p.status === "processing")
+        .map((p) => ({ id: p.id, title: p.title })),
+    [papers]
+  );
+
+  // 有进行中的任务时自动轮询列表（降低频率，减少后端访问日志噪声）
+  useEffect(() => {
+    if (processingPapers.length === 0) return;
+
+    const timer = window.setInterval(() => {
+      void fetchPapers();
+    }, 10000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [fetchPapers, processingPapers.length]);
+
+  // 运行态轮询：用于实时显示后端是否在工作（step/progress/心跳）
+  useEffect(() => {
+    if (processingPapers.length === 0) {
+      setRuntimeByPaperId((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+      return;
+    }
+
+    const fetchRuntime = async () => {
+      const nextEntries = await Promise.all(
+        processingPapers.map(async (paper) => {
+          try {
+            const res = await fetch(`/api/raw-papers/${paper.id}/runtime`, { method: "GET" });
+            if (!res.ok) return [paper.id, undefined] as const;
+
+            const data = (await res.json()) as {
+              runtime?: {
+                paper_id?: number;
+                step?: string;
+                progress?: number;
+                message?: string;
+                updated_at?: string;
+                questions_detected?: number;
+                images_cropped?: number;
+                llm_page_failures?: number;
+              } | null;
+            };
+            const rt = data.runtime;
+            if (!rt) return [paper.id, undefined] as const;
+
+            const runtime: ProcessingRuntime = {
+              paperId: String(rt.paper_id ?? paper.id),
+              step: rt.step ?? "processing",
+              progress: typeof rt.progress === "number" ? rt.progress : 0,
+              message: rt.message ?? "后台处理中",
+              updatedAt: rt.updated_at ?? "",
+              questionsDetected:
+                typeof rt.questions_detected === "number" ? rt.questions_detected : 0,
+              imagesCropped: typeof rt.images_cropped === "number" ? rt.images_cropped : 0,
+              llmPageFailures:
+                typeof rt.llm_page_failures === "number" ? rt.llm_page_failures : 0,
+            };
+            return [paper.id, runtime] as const;
+          } catch {
+            return [paper.id, undefined] as const;
+          }
+        })
+      );
+
+      setRuntimeByPaperId(Object.fromEntries(nextEntries));
+    };
+
+    void fetchRuntime();
+    const timer = window.setInterval(() => {
+      void fetchRuntime();
+    }, 3000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [processingPapers]);
 
   // 统计数字
   const counts = {
@@ -235,16 +353,19 @@ export default function RawPapersPage() {
       </div>
 
       {/* ── AI 任务看板（有正在处理的试卷时显示）── */}
-      <AIPipelineBoard
-        processingPapers={processingPapers}
-        onSimulateComplete={handleSimulateComplete}
-      />
+      <AIPipelineBoard processingPapers={processingPapers} runtimeByPaperId={runtimeByPaperId} />
 
       {/* ── Table ── */}
       <div className="flex-1 px-8 py-6 overflow-auto">
         {loadError ? (
           <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
             {loadError}
+          </div>
+        ) : null}
+
+        {actionError ? (
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+            {actionError}
           </div>
         ) : null}
 
@@ -325,27 +446,59 @@ export default function RawPapersPage() {
                   {/* 操作列 */}
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-end gap-1">
-                      {paper.status === 'pending' && (
+                      {(paper.status === "pending" || paper.status === "failed") && (
                         <button
                           type="button"
                           onClick={() => handleTriggerAI(paper.id)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-xs font-semibold text-blue-700 hover:bg-blue-100 transition-all"
-                          title="发起 AI 自动切题"
+                          disabled={triggeringId === paper.id}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
+                            paper.status === "failed"
+                              ? "bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100"
+                              : "bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100"
+                          }`}
+                          title={paper.status === "failed" ? "重新发起 AI 切题" : "发起 AI 自动切题"}
                         >
                           <Zap className="h-3.5 w-3.5" />
-                          发起切题
+                          {triggeringId === paper.id
+                            ? "发起中..."
+                            : paper.status === "failed"
+                            ? "重新切题"
+                            : "发起切题"}
+                        </button>
+                      )}
+                      {paper.status === "processing" && (
+                        <button
+                          type="button"
+                          onClick={() => handleStopAI(paper.id)}
+                          disabled={stoppingId === paper.id}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-60 disabled:cursor-not-allowed bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-100"
+                          title="手动停止当前切题任务"
+                        >
+                          <XCircle className="h-3.5 w-3.5" />
+                          {stoppingId === paper.id ? "停止中..." : "手动停止"}
+                        </button>
+                      )}
+                      {paper.status === "completed" && (
+                        <button
+                          type="button"
+                          onClick={() => handleTriggerAI(paper.id)}
+                          disabled={triggeringId === paper.id}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                          title="重新开始切题"
+                        >
+                          <Zap className="h-3.5 w-3.5" />
+                          {triggeringId === paper.id ? "发起中..." : "重新切题"}
                         </button>
                       )}
                       {paper.status === 'completed' && (
-                        <button
-                          type="button"
-                          onClick={() => setShowPreviewModal(true)}
+                        <Link
+                          href={`/raw-papers/${paper.id}/qa`}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-xs font-semibold text-green-700 hover:bg-green-100 transition-all"
-                          title="审核切好的题目"
+                          title="进入切图质检"
                         >
                           <ClipboardCheck className="h-3.5 w-3.5" />
-                          审核题目
-                        </button>
+                          切图质检
+                        </Link>
                       )}
                     </div>
                   </td>
@@ -368,12 +521,6 @@ export default function RawPapersPage() {
 
         <p className="text-xs text-slate-400 mt-3 px-1">共 {papers.length} 份试卷</p>
       </div>
-
-      {/* ── 题目预览弹窗 ── */}
-      <QuestionAuditModal
-        isOpen={showPreviewModal}
-        onClose={() => setShowPreviewModal(false)}
-      />
     </div>
   );
 }

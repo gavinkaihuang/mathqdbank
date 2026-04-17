@@ -46,14 +46,55 @@ class ExamPaperDecomposer:
             cropped.save(cropped_buffer, format="PNG", optimize=True)
             cropped_bytes = cropped_buffer.getvalue()
 
+            # Generate a lightweight preview thumbnail for list rendering.
+            thumb = cropped.copy()
+            thumb.thumbnail((500, 500), Image.Resampling.LANCZOS)
+            thumb_buffer = BytesIO()
+            thumb.save(thumb_buffer, format="WEBP", quality=60, method=6)
+            thumb_bytes = thumb_buffer.getvalue()
+
+            original_file_name = f"{crop_prefix}_{idx}.png"
+            thumb_file_name = f"{crop_prefix}_{idx}_thumb.webp"
+
             uploaded = self.storage.upload_object(
                 file_data=cropped_bytes,
-                file_name=f"{crop_prefix}_{idx}.png",
+                file_name=original_file_name,
                 content_type="image/png",
+            )
+            self.storage.upload_object(
+                file_data=thumb_bytes,
+                file_name=thumb_file_name,
+                content_type="image/webp",
             )
             uploaded_urls.append(uploaded)
 
         return uploaded_urls
+
+    def crop_single_box(
+        self,
+        original_image_bytes: bytes,
+        box_2d: Sequence[Any],
+        crop_prefix: str,
+    ) -> str:
+        image = Image.open(BytesIO(original_image_bytes)).convert("RGB")
+        width, height = image.size
+
+        pixel_box = self._normalized_box_to_pixels(box_2d, width=width, height=height)
+        if pixel_box is None:
+            raise ValueError("Invalid normalized box coordinates")
+
+        left, upper, right, lower = pixel_box
+        cropped = image.crop((left, upper, right, lower))
+
+        cropped_buffer = BytesIO()
+        cropped.save(cropped_buffer, format="PNG", optimize=True)
+        cropped_bytes = cropped_buffer.getvalue()
+
+        return self.storage.upload_object(
+            file_data=cropped_bytes,
+            file_name=f"{crop_prefix}.png",
+            content_type="image/png",
+        )
 
     def _resolve_question_boxes(self, question_payload: dict[str, Any]) -> list[list[Any]]:
         primary_box = question_payload.get("question_box_2d")
