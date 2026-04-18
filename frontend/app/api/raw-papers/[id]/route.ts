@@ -24,3 +24,24 @@ export async function GET(_req: NextRequest, context: RouteContext) {
     );
   }
 }
+
+export async function PATCH(req: NextRequest, context: RouteContext) {
+  const { id } = await context.params;
+
+  try {
+    const body = await req.json();
+    const response = await fetch(`${backendBaseUrl}/api/v1/raw-papers/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json().catch(() => ({ detail: "Invalid backend response" }));
+    return NextResponse.json(data, { status: response.status });
+  } catch {
+    return NextResponse.json(
+      { detail: "Cannot connect to backend service" },
+      { status: 502 },
+    );
+  }
+}

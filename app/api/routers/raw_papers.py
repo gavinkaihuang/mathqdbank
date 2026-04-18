@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_db
 from app.core.database import SessionLocal
@@ -21,6 +21,7 @@ from app.schemas import (
 from app.schemas.pagination import PageResponse
 from app.models import Question, QuestionImage
 from app.services.exam_paper_decomposer import ExamPaperDecomposer
+from app.services.ai_pipeline_service import AIPipelineService
 from app.services.extractor import PaperExtractorService
 from app.services.minio_service import MinioService
 from app.services import raw_papers as raw_paper_service
@@ -44,6 +45,16 @@ def _run_paper_extraction(paper_id: int) -> None:
         raise
     finally:
         db.close()
+
+
+def _run_ai_pipeline(paper_id: int) -> None:
+    try:
+        logger.info("[PIPELINE] background task started: paper_id=%s", paper_id)
+        AIPipelineService().process_paper(paper_id=paper_id)
+        logger.info("[PIPELINE] background task finished: paper_id=%s", paper_id)
+    except Exception:
+        logger.exception("[PIPELINE] background task crashed: paper_id=%s", paper_id)
+        raise
 
 
 @router.post("", response_model=RawPaperResponse, status_code=status.HTTP_201_CREATED)
@@ -76,6 +87,7 @@ def get_raw_paper(raw_paper_id: int, db: DbSession) -> RawPaperQaResponse:
 
     questions = db.execute(
         select(Question)
+        .options(selectinload(Question.tags), selectinload(Question.images))
         .where(Question.raw_paper_id == raw_paper.id)
         .order_by(Question.problem_number.asc().nullslast(), Question.id.asc())
     ).scalars().all()
@@ -89,8 +101,21 @@ def get_raw_paper(raw_paper_id: int, db: DbSession) -> RawPaperQaResponse:
                 id=q.id,
                 problem_number=q.problem_number,
                 question_type=q.question_type,
+                content_latex=q.content_latex,
+                answer_latex=q.answer_latex,
                 image_url=storage.build_object_url(primary_object) if primary_object else None,
                 crop_urls=crop_urls,
+                type_specific_data=q.type_specific_data or {},
+                difficulty=q.difficulty,
+                status=q.status or "pending_review",
+                tags=[
+                    {
+                        "id": tag.id,
+                        "name": tag.name,
+                        "category": tag.category,
+                    }
+                    for tag in (q.tags or [])
+                ],
             )
         )
 
@@ -344,6 +369,42 @@ def trigger_raw_paper_extraction(
     )
     background_tasks.add_task(_run_paper_extraction, raw_paper.id)
     return raw_paper
+
+
+@router.post("/{raw_paper_id}/process")
+def trigger_raw_paper_ai_pipeline(
+    raw_paper_id: int,
+    background_tasks: BackgroundTasks,
+    db: DbSession,
+) -> dict[str, object]:
+    """
+    阶段二入口：端到端 AI 切题 + OCR 后台任务。
+
+    路由职责：
+    1) 仅做状态切换与入队，不等待模型执行完成；
+    2) 立即返回“已加入队列”，前端通过轮询状态获知进度。
+    """
+    raw_paper = raw_paper_service.get_raw_paper(db, raw_paper_id)
+    if raw_paper is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Raw paper not found")
+
+    if raw_paper.status == "processing":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Raw paper {raw_paper_id} is already processing",
+        )
+
+    raw_paper.status = "processing"
+    db.commit()
+    db.refresh(raw_paper)
+
+    background_tasks.add_task(_run_ai_pipeline, raw_paper_id)
+    return {
+        "code": 200,
+        "message": "已成功加入 AI 处理队列",
+        "paper_id": raw_paper_id,
+        "status": raw_paper.status,
+    }
 
 
 @router.post("/{raw_paper_id}/extract/stop")

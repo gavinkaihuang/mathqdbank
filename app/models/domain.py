@@ -79,6 +79,9 @@ class Question(Base):
     tags = relationship(
         "Tag", secondary=question_tag_association, back_populates="questions"
     )
+    variants = relationship(
+        "LiveQuestion", back_populates="parent_question", cascade="all, delete-orphan"
+    )
 
 
 class QuestionImage(Base):
@@ -103,6 +106,34 @@ class Tag(Base):
     questions = relationship(
         "Question", secondary=question_tag_association, back_populates="tags"
     )
+
+
+class LiveQuestion(Base):
+    __tablename__ = "live_questions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    parent_question_id = Column(
+        Integer,
+        ForeignKey("questions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    content_latex = Column(Text, nullable=False)
+    answer_latex = Column(Text)
+    question_type = Column(String(50), nullable=False)
+    type_specific_data = Column(JSON)
+    generation_prompt = Column(Text)
+
+    irt_difficulty = Column(Float, default=0.5, nullable=False)
+    total_attempts = Column(Integer, default=0, nullable=False)
+    correct_rate = Column(Float, default=0.0, nullable=False)
+    status = Column(String(50), default="active", nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    parent_question = relationship("Question", back_populates="variants")
 
 
 class PromptTemplate(Base):

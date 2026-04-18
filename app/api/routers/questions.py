@@ -24,10 +24,22 @@ def list_questions(
     db: DbSession,
     page: int = Query(default=1, ge=1),
     size: int = Query(default=20, ge=1, le=100),
+    raw_paper_id: int | None = Query(default=None),
+    keyword: str | None = Query(default=None),
 ) -> PageResponse[QuestionResponse]:
     skip = (page - 1) * size
-    items = question_service.list_questions(db, skip=skip, limit=size)
-    total = question_service.count_questions(db)
+    items = question_service.list_questions(
+        db,
+        skip=skip,
+        limit=size,
+        raw_paper_id=raw_paper_id,
+        keyword=keyword,
+    )
+    total = question_service.count_questions(
+        db,
+        raw_paper_id=raw_paper_id,
+        keyword=keyword,
+    )
     return PageResponse(items=items, total=total, page=page, size=size)
 
 

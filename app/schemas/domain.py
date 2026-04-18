@@ -25,6 +25,13 @@ class TagResponse(TagBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class Stage1QuestionExtraction(BaseModel):
+    """Stage 1 LLM return value: pure geometry + problem number only."""
+    problem_number: str
+    question_box_2d: list[int] = Field(min_length=4, max_length=4)
+    diagram_box_2d: list[int] | None = Field(default=None)
+
+
 class RawPaperBase(BaseModel):
     title: str
     year: int
@@ -56,8 +63,14 @@ class RawPaperQaQuestionItem(BaseModel):
     id: int
     problem_number: str | None = None
     question_type: str
+    content_latex: str | None = None
+    answer_latex: str | None = None
     image_url: str | None = None
     crop_urls: list[str] = Field(default_factory=list)
+    type_specific_data: dict[str, Any] = Field(default_factory=dict)
+    difficulty: float | None = None
+    status: str = "pending_review"
+    tags: list[TagResponse] = Field(default_factory=list)
 
 
 class RawPaperQaResponse(RawPaperResponse):
@@ -155,5 +168,23 @@ class QuestionResponse(QuestionBase):
     created_at: datetime
     updated_at: datetime
     tags: list[TagResponse] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LiveQuestionResponse(BaseModel):
+    id: int
+    parent_question_id: int
+    content_latex: str
+    answer_latex: str | None = None
+    question_type: str
+    type_specific_data: dict[str, Any] | None = None
+    generation_prompt: str | None = None
+    irt_difficulty: float
+    total_attempts: int
+    correct_rate: float
+    status: str
+    created_at: datetime
+    updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

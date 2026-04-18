@@ -70,6 +70,78 @@ class ExamPaperDecomposer:
 
         return uploaded_urls
 
+    def batch_extract_paper(
+        self,
+        original_image_bytes: bytes,
+        questions_payload: list[dict[str, Any]],
+        paper_prefix: str,
+    ) -> dict[str, list[str]]:
+        """
+        Batch crop all questions from one page in a single image decode.
+        Returns dict mapping problem_number -> list of uploaded image URLs.
+        """
+        result: dict[str, list[str]] = {}
+        
+        image = Image.open(BytesIO(original_image_bytes)).convert("RGB")
+        width, height = image.size
+        
+        for q_idx, payload in enumerate(questions_payload, start=1):
+            problem_number = str(payload.get("problem_number", ""))
+            boxes = self._resolve_question_boxes(payload)
+            
+            if not boxes:
+                logger.warning(
+                    "[CUT] batch crop: skip question with no valid box: problem_number=%s",
+                    problem_number,
+                )
+                result[problem_number] = []
+                continue
+            
+            uploaded_urls: list[str] = []
+            
+            for box_idx, box in enumerate(boxes, start=1):
+                pixel_box = self._normalized_box_to_pixels(box, width=width, height=height)
+                if pixel_box is None:
+                    logger.warning(
+                        "[CUT] batch crop: invalid box clamping: problem_number=%s box_idx=%s",
+                        problem_number, box_idx,
+                    )
+                    continue
+                
+                left, upper, right, lower = pixel_box
+                cropped = image.crop((left, upper, right, lower))
+                
+                # Save PNG original
+                cropped_buffer = BytesIO()
+                cropped.save(cropped_buffer, format="PNG", optimize=True)
+                cropped_bytes = cropped_buffer.getvalue()
+                
+                # Generate WebP thumbnail
+                thumb = cropped.copy()
+                thumb.thumbnail((500, 500), Image.Resampling.LANCZOS)
+                thumb_buffer = BytesIO()
+                thumb.save(thumb_buffer, format="WEBP", quality=60, method=6)
+                thumb_bytes = thumb_buffer.getvalue()
+                
+                original_file_name = f"{paper_prefix}_q{q_idx}_b{box_idx}.png"
+                thumb_file_name = f"{paper_prefix}_q{q_idx}_b{box_idx}_thumb.webp"
+                
+                uploaded = self.storage.upload_object(
+                    file_data=cropped_bytes,
+                    file_name=original_file_name,
+                    content_type="image/png",
+                )
+                self.storage.upload_object(
+                    file_data=thumb_bytes,
+                    file_name=thumb_file_name,
+                    content_type="image/webp",
+                )
+                uploaded_urls.append(uploaded)
+            
+            result[problem_number] = uploaded_urls
+        
+        return result
+
     def crop_single_box(
         self,
         original_image_bytes: bytes,

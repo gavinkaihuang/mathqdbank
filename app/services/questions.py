@@ -5,6 +5,9 @@ from app.models import Question, Tag
 from app.schemas import QuestionCreate, QuestionUpdate
 
 
+_SUPPORTED_QUESTION_TYPES = ("choice", "fill", "judge", "essay")
+
+
 def _resolve_tags(db: Session, tag_ids: list[int]) -> list[Tag]:
     """Fetch Tag objects for the given ids; raises BadRequestError on missing ids."""
     from app.core.exceptions import BadRequestError
@@ -29,13 +32,26 @@ def create_question(db: Session, payload: QuestionCreate) -> Question:
     return question
 
 
-def list_questions(db: Session, skip: int = 0, limit: int = 20) -> list[Question]:
+def list_questions(
+    db: Session,
+    skip: int = 0,
+    limit: int = 20,
+    raw_paper_id: int | None = None,
+    keyword: str | None = None,
+) -> list[Question]:
     stmt = (
         select(Question)
+        .where(Question.question_type.in_(_SUPPORTED_QUESTION_TYPES))
         .options(selectinload(Question.tags))
-        .offset(skip)
-        .limit(limit)
     )
+
+    if raw_paper_id is not None:
+        stmt = stmt.where(Question.raw_paper_id == raw_paper_id)
+
+    if keyword:
+        stmt = stmt.where(Question.content_latex.ilike(f"%{keyword}%"))
+
+    stmt = stmt.offset(skip).limit(limit)
     return list(db.execute(stmt).scalars().all())
 
 
@@ -46,7 +62,11 @@ def search_questions(
     tag_name: str | None = None,
     status: str | None = None,
 ) -> list[Question]:
-    stmt = select(Question).options(selectinload(Question.tags))
+    stmt = (
+        select(Question)
+        .where(Question.question_type.in_(_SUPPORTED_QUESTION_TYPES))
+        .options(selectinload(Question.tags))
+    )
 
     if tag_name:
         stmt = stmt.join(Question.tags).where(Tag.name == tag_name)
@@ -91,10 +111,20 @@ def count_questions(
     db: Session,
     tag_name: str | None = None,
     status: str | None = None,
+    raw_paper_id: int | None = None,
+    keyword: str | None = None,
 ) -> int:
-    stmt = select(func.count()).select_from(Question)
+    stmt = (
+        select(func.count())
+        .select_from(Question)
+        .where(Question.question_type.in_(_SUPPORTED_QUESTION_TYPES))
+    )
     if tag_name:
         stmt = stmt.join(Question.tags).where(Tag.name == tag_name)
     if status:
         stmt = stmt.where(Question.status == status)
+    if raw_paper_id is not None:
+        stmt = stmt.where(Question.raw_paper_id == raw_paper_id)
+    if keyword:
+        stmt = stmt.where(Question.content_latex.ilike(f"%{keyword}%"))
     return db.execute(stmt).scalar_one()

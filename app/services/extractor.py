@@ -590,7 +590,7 @@ class PaperExtractorService:
                         problem_number=str(payload.get("problem_number", "")),
                         question_type=str(payload.get("question_type", "essay")),
                         content_latex=str(payload.get("content_latex", "")),
-                        type_specific_data=payload.get("type_specific_data", {}),
+                            type_specific_data=self._extract_question_metadata(payload),
                         difficulty=self._safe_float(payload.get("predicted_difficulty", 0.5), 0.5),
                         status="pending_review",
                     )
@@ -619,11 +619,12 @@ class PaperExtractorService:
                             )
                 persisted_count += 1
                 logger.info(
-                    "[CUT] question persisted: run_id=%s paper_id=%s idx=%s question_id=%s",
+                    "[CUT] question persisted: run_id=%s paper_id=%s idx=%s question_id=%s problem_number=%s",
                     run_id,
                     paper.id,
                     index,
                     question.id,
+                    question.problem_number,
                 )
             except Exception:
                 logger.exception(
@@ -653,6 +654,16 @@ class PaperExtractorService:
         except (TypeError, ValueError):
             return default
 
+    def _extract_question_metadata(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Extract coordinate geometry as question metadata for UI rendering & auditing."""
+        meta_data: dict[str, Any] = {}
+        question_box = payload.get("question_box_2d")
+        diagram_box = payload.get("diagram_box_2d")
+        if question_box:
+            meta_data["question_box_2d"] = question_box
+        if diagram_box:
+            meta_data["diagram_box_2d"] = diagram_box
+        return meta_data
 
 # Example usage with KeyRelayClient before calling Gemini:
 #

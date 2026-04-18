@@ -1,6 +1,7 @@
 """Database models package."""
 
 from app.models.domain import (
+	LiveQuestion,
 	PromptTemplate,
 	Question,
 	QuestionImage,

@@ -18,6 +18,7 @@ type Props = {
   paperId: string;
   originalUrls: string[];
   initialProblemNumber: string;
+  initialPageIndex?: number;
   onClose: () => void;
   onSuccess: (result: RecropResponse) => void;
 };
@@ -44,6 +45,7 @@ export default function ManualCropModal({
   paperId,
   originalUrls,
   initialProblemNumber,
+  initialPageIndex = 0,
   onClose,
   onSuccess,
 }: Props) {
@@ -58,11 +60,11 @@ export default function ManualCropModal({
 
   useEffect(() => {
     if (!open) return;
-    setPageIndex(0);
+    setPageIndex(initialPageIndex);
     setCrop(undefined);
     setError("");
     setProblemNumber(initialProblemNumber);
-  }, [initialProblemNumber, open]);
+  }, [initialPageIndex, initialProblemNumber, open]);
 
   const canSubmit = useMemo(() => {
     if (!crop) return false;

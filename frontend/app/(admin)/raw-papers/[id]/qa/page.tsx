@@ -223,7 +223,9 @@ export default function RawPaperQaPage() {
                 <div className="px-4 py-4 bg-slate-50">
                   {q.image_url ? (
                     (() => {
-                      const thumbUrl = q.image_url.replace(".png", "_thumb.webp");
+                      const originalUrl = q.image_url;
+                      if (!originalUrl) return null;
+                      const thumbUrl = originalUrl.replace(".png", "_thumb.webp");
                       return (
                         <img
                           src={thumbUrl}
@@ -231,8 +233,8 @@ export default function RawPaperQaPage() {
                           loading="lazy"
                           onError={(e) => {
                             const target = e.currentTarget;
-                            if (!target.src.endsWith(q.image_url)) {
-                              target.src = q.image_url;
+                            if (!target.src.endsWith(originalUrl)) {
+                              target.src = originalUrl;
                             }
                           }}
                           className="block w-full h-auto object-contain"

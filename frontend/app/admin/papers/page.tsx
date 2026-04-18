@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Upload, FileImage, CheckCircle2, Clock, AlertCircle, Loader2, X } from "lucide-react";
 
 type RawPaper = {
@@ -297,9 +298,12 @@ export default function PapersPage() {
                       </span>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <button className="text-xs text-slate-500 hover:text-slate-900 font-medium hover:underline transition-colors">
+                      <Link
+                        href={`/raw-papers/${paper.id}`}
+                        className="text-xs text-slate-500 hover:text-slate-900 font-medium hover:underline transition-colors"
+                      >
                         查看详情
-                      </button>
+                      </Link>
                     </td>
                   </tr>
                 );

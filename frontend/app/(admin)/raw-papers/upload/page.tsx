@@ -53,6 +53,7 @@ type UploadState = "idle" | "loading" | "success" | "error";
 // ── 主页面组件 ─────────────────────────────────────────────
 export default function UploadPage() {
   const [title, setTitle] = useState("");
+  const [year, setYear] = useState(String(new Date().getFullYear()));
   const [grade, setGrade] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -111,25 +112,40 @@ export default function UploadPage() {
       setErrorMsg("请选择适用年级");
       return;
     }
+    const parsedYear = Number.parseInt(year, 10);
+    if (!Number.isInteger(parsedYear) || parsedYear < 1900 || parsedYear > 2100) {
+      setErrorMsg("请输入正确的试卷年份");
+      return;
+    }
     if (files.length === 0) {
       setErrorMsg("请至少上传一个文件");
       return;
     }
 
     setUploadState("loading");
+    try {
+      const formData = new FormData();
+      formData.append("title", title.trim());
+      formData.append("year", String(parsedYear));
+      formData.append("paper_type", grade);
+      files.forEach((file) => formData.append("files", file));
 
-    // 模拟异步上传（1.5s 延迟）
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+      const response = await fetch("/api/raw-papers/upload", {
+        method: "POST",
+        body: formData,
+      });
 
-    const payload = {
-      title: title.trim(),
-      grade,
-      files: files.map((f) => ({ name: f.name, size: f.size, type: f.type })),
-    };
+      if (!response.ok) {
+        const errorBody = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(errorBody?.detail ?? "上传失败，请稍后重试");
+      }
 
-    console.log("[MathQBank] 上传表单数据:", payload);
-
-    setUploadState("success");
+      setUploadState("success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "上传失败，请稍后重试";
+      setErrorMsg(message);
+      setUploadState("error");
+    }
   };
 
   // ── 成功状态 ─────────────────────────────────────────────
@@ -159,6 +175,7 @@ export default function UploadPage() {
                 type="button"
                 onClick={() => {
                   setTitle("");
+                  setYear(String(new Date().getFullYear()));
                   setGrade("");
                   setFiles([]);
                   setUploadState("idle");
@@ -199,6 +216,27 @@ export default function UploadPage() {
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="例如：2024 年高考数学全国甲卷"
+              className="w-full px-4 py-2.5 text-sm bg-white border border-slate-200 rounded-xl placeholder:text-slate-400 focus:outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-900/10 transition"
+            />
+          </div>
+
+          {/* ── 适用年级 ── */}
+          <div>
+            <label
+              htmlFor="paper-year"
+              className="block text-sm font-semibold text-slate-700 mb-1.5"
+            >
+              试卷年份
+              <span className="text-red-400 ml-0.5">*</span>
+            </label>
+            <input
+              id="paper-year"
+              type="number"
+              min={1900}
+              max={2100}
+              value={year}
+              onChange={(e) => setYear(e.target.value)}
+              placeholder="例如：2024"
               className="w-full px-4 py-2.5 text-sm bg-white border border-slate-200 rounded-xl placeholder:text-slate-400 focus:outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-900/10 transition"
             />
           </div>

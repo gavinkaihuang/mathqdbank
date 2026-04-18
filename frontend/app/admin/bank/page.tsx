@@ -1,71 +1,34 @@
-import { Search, SlidersHorizontal, BookOpen } from "lucide-react";
+"use client";
 
-const mockQuestions = [
-  {
-    id: 1,
-    type: "essay",
-    difficulty: 75,
-    content:
-      "设函数 f(x) = sin(x + π/6) + cos(x - π/6)，求其最小正周期及在 [0, π/2] 上的最大值和最小值。",
-    tags: ["三角函数", "最值"],
-  },
-  {
-    id: 2,
-    type: "choice",
-    difficulty: 45,
-    content:
-      "已知等差数列 {aₙ} 满足 a₁ = 2，公差 d = 3，则前 10 项之和 S₁₀ = （ ）",
-    tags: ["数列", "等差数列"],
-  },
-  {
-    id: 3,
-    type: "fill",
-    difficulty: 55,
-    content:
-      "曲线 y = x³ − 3x 在点 (1, −2) 处的切线方程为 ________。",
-    tags: ["导数", "切线方程"],
-  },
-  {
-    id: 4,
-    type: "essay",
-    difficulty: 88,
-    content:
-      "在直角坐标系中，椭圆 C: x²/4 + y² = 1，直线 l: y = kx + 1 与椭圆 C 相交于 A、B 两点，求 |AB| 的取值范围。",
-    tags: ["解析几何", "椭圆", "弦长"],
-  },
-  {
-    id: 5,
-    type: "choice",
-    difficulty: 30,
-    content:
-      "下列关于虚数的说法正确的是：( A ) 虚数的模为负数 ( B ) 两个复数之积一定是复数 ( C ) 纯虚数的实部为 0 ( D ) 以上均错。",
-    tags: ["复数", "基础概念"],
-  },
-  {
-    id: 6,
-    type: "fill",
-    difficulty: 62,
-    content:
-      "已知向量 a⃗ = (1, 2)，b⃗ = (3, −1)，则 |a⃗ + b⃗| = ________。",
-    tags: ["向量", "模长"],
-  },
-  {
-    id: 7,
-    type: "essay",
-    difficulty: 80,
-    content:
-      "一个袋子中有 3 个红球和 2 个白球，每次随机取一个球后放回，连续取 4 次，恰好取到 2 个红球的概率是多少？",
-    tags: ["概率统计", "二项分布"],
-  },
-  {
-    id: 8,
-    type: "choice",
-    difficulty: 50,
-    content:
-      "不等式 |x − 2| + |x + 1| ≥ 5 的解集为（ ）A. x ≤ −2 或 x ≥ 3  B. −2 ≤ x ≤ 3  C. x ≤ −1 或 x ≥ 4  D. 以上均不正确。",
-    tags: ["不等式", "绝对值"],
-  },
-];
+import { useEffect, useMemo, useState } from "react";
+import { Search, SlidersHorizontal, BookOpen, Loader2 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
+
+type BackendLiveQuestion = {
+  id: number;
+  parent_question_id: number;
+  question_type: string;
+  irt_difficulty: number;
+  content_latex: string;
+  status: string;
+};
+
+type LiveQuestionsPageResponse = {
+  items?: BackendLiveQuestion[];
+  total?: number;
+  detail?: string;
+};
+
+type BankQuestion = {
+  id: number;
+  parentId: number;
+  type: string;
+  difficulty: number;
+  content: string;
+};
 
 const typeConfig: Record<
   string,
@@ -112,6 +75,78 @@ function DifficultyBar({ value }: { value: number }) {
 }
 
 export default function BankPage() {
+  const [allQuestions, setAllQuestions] = useState<BankQuestion[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [keyword, setKeyword] = useState("");
+  const [selectedType, setSelectedType] = useState("");
+  const [selectedDifficulty, setSelectedDifficulty] = useState("");
+
+  useEffect(() => {
+    const fetchQuestions = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const pageSize = 100;
+        const allItems: BackendLiveQuestion[] = [];
+        let page = 1;
+
+        while (true) {
+          const response = await fetch(`/api/live-questions?page=${page}&size=${pageSize}`, {
+            method: "GET",
+            cache: "no-store",
+          });
+          const data = (await response.json().catch(() => ({}))) as LiveQuestionsPageResponse;
+          if (!response.ok) {
+            throw new Error(data.detail || `加载活水题库失败 (HTTP ${response.status})`);
+          }
+
+          const pageItems = data.items || [];
+          allItems.push(...pageItems);
+
+          if (pageItems.length < pageSize) {
+            break;
+          }
+          page += 1;
+        }
+
+        const mapped = allItems.map((item) => ({
+          id: item.id,
+          parentId: item.parent_question_id,
+          type: item.question_type || "essay",
+          difficulty: Math.round(Math.max(0, Math.min(1, item.irt_difficulty ?? 0.5)) * 100),
+          content: item.content_latex || "",
+        }));
+
+        setAllQuestions(mapped);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "加载活水题库失败");
+        setAllQuestions([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    void fetchQuestions();
+  }, []);
+
+  const questions = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    return allQuestions.filter((q) => {
+      if (kw) {
+        if (!q.content.toLowerCase().includes(kw)) return false;
+      }
+
+      if (selectedType && q.type !== selectedType) return false;
+
+      if (selectedDifficulty === "easy" && q.difficulty >= 45) return false;
+      if (selectedDifficulty === "medium" && (q.difficulty < 45 || q.difficulty >= 70)) return false;
+      if (selectedDifficulty === "hard" && q.difficulty < 70) return false;
+
+      return true;
+    });
+  }, [allQuestions, keyword, selectedDifficulty, selectedType]);
+
   return (
     <div className="flex flex-col h-full">
       {/* Page header */}
@@ -119,7 +154,7 @@ export default function BankPage() {
         <div>
           <h1 className="text-xl font-semibold text-slate-800">活水题库</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            共 {mockQuestions.length} 道题目已入库
+            共 {questions.length} 道题目已入库
           </p>
         </div>
       </div>
@@ -132,13 +167,19 @@ export default function BankPage() {
           <input
             type="text"
             placeholder="搜索题目内容…"
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
             className="w-full pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/20 focus:border-slate-400 transition"
           />
         </div>
 
         {/* Type filter */}
         <div className="relative">
-          <select className="text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-8 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900/20 focus:border-slate-400 transition appearance-none cursor-pointer">
+          <select
+            value={selectedType}
+            onChange={(e) => setSelectedType(e.target.value)}
+            className="text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-8 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900/20 focus:border-slate-400 transition appearance-none cursor-pointer"
+          >
             <option value="">全部题型</option>
             <option value="choice">选择题</option>
             <option value="fill">填空题</option>
@@ -164,7 +205,11 @@ export default function BankPage() {
 
         {/* Difficulty filter */}
         <div className="relative">
-          <select className="text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-8 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900/20 focus:border-slate-400 transition appearance-none cursor-pointer">
+          <select
+            value={selectedDifficulty}
+            onChange={(e) => setSelectedDifficulty(e.target.value)}
+            className="text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-8 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900/20 focus:border-slate-400 transition appearance-none cursor-pointer"
+          >
             <option value="">全部难度</option>
             <option value="easy">基础（0 – 44）</option>
             <option value="medium">中等（45 – 69）</option>
@@ -195,8 +240,21 @@ export default function BankPage() {
 
       {/* Card grid */}
       <div className="flex-1 overflow-auto px-8 py-6">
+        {error ? (
+          <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {error}
+          </div>
+        ) : null}
+
+        {loading ? (
+          <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            正在加载活水变式题数据...
+          </div>
+        ) : null}
+
         <div className="grid grid-cols-2 gap-4">
-          {mockQuestions.map((q) => {
+          {!loading && questions.map((q) => {
             const type = typeConfig[q.type] ?? typeConfig.essay;
             return (
               <div
@@ -211,35 +269,31 @@ export default function BankPage() {
                     {type.label}
                   </span>
                   <span className="text-xs text-slate-400 font-mono tabular-nums">
-                    #{q.id}
+                    #{q.id} · 原题 #{q.parentId}
                   </span>
                 </div>
 
                 {/* Content */}
                 <div className="flex items-start gap-2.5">
                   <BookOpen className="h-4 w-4 text-slate-400 shrink-0 mt-0.5" />
-                  <p className="text-sm text-slate-700 leading-relaxed line-clamp-3">
-                    {q.content}
-                  </p>
+                  <div className="text-sm text-slate-700 leading-relaxed line-clamp-3 min-w-0 [&_.katex-display]:my-1 [&_.katex-display]:overflow-x-auto">
+                    <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                      {q.content}
+                    </ReactMarkdown>
+                  </div>
                 </div>
 
                 {/* Difficulty bar */}
                 <DifficultyBar value={q.difficulty} />
-
-                {/* Tags */}
-                <div className="flex flex-wrap gap-1.5">
-                  {q.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded-md text-xs font-medium"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
               </div>
             );
           })}
+
+          {!loading && !error && questions.length === 0 ? (
+            <div className="col-span-2 rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-500">
+              当前没有符合条件的活水变式题
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

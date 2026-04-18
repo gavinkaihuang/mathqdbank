@@ -5,6 +5,7 @@ from app.schemas.domain import (
 	PromptTemplateCreate,
 	PromptTemplateResponse,
 	PromptTemplateUpdate,
+	LiveQuestionResponse,
 	QuestionBase,
 	QuestionCreate,
 	QuestionResponse,
@@ -26,6 +27,7 @@ from app.schemas.domain import (
 from app.schemas.pagination import PageResponse
 
 __all__ = [
+	"LiveQuestionResponse",
 	"RawPaperBase",
 	"RawPaperCreate",
 	"RawPaperQaQuestionItem",

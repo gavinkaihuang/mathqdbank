@@ -7,7 +7,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   FileStack,
-  ClipboardCheck,
+  Upload,
   Database,
   FileText,
   GraduationCap,
@@ -44,6 +44,12 @@ const navSections: NavSection[] = [
     sectionLabel: "原卷处理",
     items: [
       {
+        href: "/raw-papers/upload",
+        label: "上传试卷",
+        sublabel: "Upload Paper",
+        icon: Upload,
+      },
+      {
         href: "/raw-papers",
         label: "原卷管理",
         sublabel: "Raw Papers",
@@ -54,17 +60,6 @@ const navSections: NavSection[] = [
         label: "试卷控制台",
         sublabel: "Paper Console",
         icon: FileText,
-      },
-    ],
-  },
-  {
-    sectionLabel: "质量管控",
-    items: [
-      {
-        href: "/admin/review",
-        label: "AI 校验台",
-        sublabel: "AI Review",
-        icon: ClipboardCheck,
       },
     ],
   },
