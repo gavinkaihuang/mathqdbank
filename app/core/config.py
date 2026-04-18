@@ -10,7 +10,9 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/mathqbank"
     MODEL_TIER_FLASH: str = "gemini-1.5-flash"
     MODEL_TIER_PRO: str = "gemini-1.5-pro"
+    GEMINI_MODEL_NAME: str = ""
     GEMINI_API_KEY: str = ""
+    TAXONOMY_TREE_URL: str = "http://192.168.44.163:8006/api/v1/taxonomy/tree"
     LLM_DEBUG_ENABLED: bool = False
     LLM_DEBUG_MAX_TEXT_CHARS: int = 3000
     KEY_RELAY_BASE_URL: str

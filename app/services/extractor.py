@@ -3,9 +3,11 @@ import json
 import logging
 import uuid
 from copy import deepcopy
+from io import BytesIO
 from typing import Any
 
 import requests
+from PIL import Image
 from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
@@ -113,9 +115,8 @@ class PaperExtractorService:
                     continue
 
                 try:
-                    base64_image = base64.b64encode(image_bytes).decode("utf-8")
                     page_questions = self.call_llm_vision(
-                        base64_image,
+                        image_bytes,
                         paper_id=paper.id,
                         page_index=page_index,
                         total_pages=total_pages,
@@ -318,7 +319,7 @@ class PaperExtractorService:
 
     def call_llm_vision(
         self,
-        base64_image: str,
+        image_bytes: bytes,
         *,
         paper_id: int,
         page_index: int,
@@ -339,6 +340,9 @@ class PaperExtractorService:
             f"{settings.MODEL_TIER_FLASH}:generateContent?key={api_key}"
         )
         endpoint_safe = endpoint.replace(api_key, "***")
+
+        optimized_image_bytes = self.optimize_image_for_llm(image_bytes)
+        base64_image = base64.b64encode(optimized_image_bytes).decode("utf-8")
 
         payload = {
             "system_instruction": {
@@ -385,7 +389,7 @@ class PaperExtractorService:
             logger.info("[LLM DEBUG] request payload=%s", json.dumps(debug_payload, ensure_ascii=False))
 
         try:
-            response = requests.post(endpoint, json=payload, timeout=90)
+            response = requests.post(endpoint, json=payload, timeout=180)
         except requests.RequestException as exc:
             # Network errors are not returned by LLM provider payload, so skip callback.
             raise RuntimeError(f"Gemini request failed: {exc}") from exc
@@ -448,6 +452,21 @@ class PaperExtractorService:
         )
 
         return parsed
+
+    def optimize_image_for_llm(self, image_bytes: bytes, max_width: int = 1500) -> bytes:
+        with Image.open(BytesIO(image_bytes)) as image:
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+
+            width, height = image.size
+            if width > max_width:
+                ratio = max_width / float(width)
+                new_height = max(1, int(height * ratio))
+                image = image.resize((max_width, new_height), Image.Resampling.LANCZOS)
+
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=85)
+            return output.getvalue()
 
     def _resolve_gemini_key(
         self,

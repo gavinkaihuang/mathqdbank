@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import logging
 from io import BytesIO
 from typing import Any
 
+import httpx
 import requests
+from cachetools import TTLCache
 from PIL import Image
 from sqlalchemy import delete
+from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.database import SessionLocal
+from app.models import PromptTemplate
 from app.models import Question, QuestionImage, RawPaper, Tag
+from app.services.key_manager import KeyRelayClient
 from app.services.minio_service import MinioService
 
 logger = logging.getLogger(__name__)
@@ -26,10 +34,16 @@ class AIPipelineService:
     3) 后端据坐标做物理切图，并把 OCR 结果和切图 URL 一起入库。
     """
 
-    TAXONOMY_TREE_URL = "http://192.168.44.163:8006/api/v1/taxonomy/tree"
+    TAXONOMY_TREE_CACHE = TTLCache(maxsize=1, ttl=12 * 60 * 60)
+    TAXONOMY_TREE_CACHE_KEY = "taxonomy_markdown"
+
+    @property
+    def taxonomy_tree_url(self) -> str:
+        return settings.TAXONOMY_TREE_URL
 
     def __init__(self) -> None:
         self.storage = MinioService()
+        self.key_relay = KeyRelayClient()
 
     def process_paper(self, paper_id: int) -> None:
         """
@@ -55,8 +69,16 @@ class AIPipelineService:
                 raise RuntimeError("raw paper has no page_urls")
 
             # 1) 获取动态知识点大纲并格式化成 Markdown 文本（喂给模型做标签约束）
-            taxonomy_tree = self.fetch_taxonomy_tree()
-            taxonomy_markdown = self.format_taxonomy_as_markdown(taxonomy_tree)
+            taxonomy_markdown = self.get_taxonomy_markdown()
+
+            # 2) 从数据库读取系统提示词模板，并注入知识点大纲
+            full_prompt = self.build_exam_paper_decomposer_prompt(
+                db=db,
+                taxonomy_markdown=taxonomy_markdown,
+            )
+
+            # 3) 严格从环境变量配置读取模型名
+            model_name = self.get_model_name_from_settings()
 
             # 为了避免重复入库，这里先清空该试卷历史识别题。
             # 注意：此动作仅用于“重新处理试卷”的场景，保证结果可重复。
@@ -68,16 +90,17 @@ class AIPipelineService:
                 # 2) 从 MinIO 下载原图到内存（不落盘）
                 original_bytes = self.storage.get_object_bytes(source)
 
-                # 3) 构造 Prompt + 图片，调用 Gemini（mock 函数，后续你可接 KeyRelay）
+                # 4) 构造 Prompt + 图片，调用 Gemini
                 llm_payload = self.call_gemini_api(
-                    prompt=self.build_prompt(taxonomy_markdown),
+                    prompt=full_prompt,
                     image_bytes=original_bytes,
+                    model_name=model_name,
                 )
 
-                # 4) 解析模型 JSON（每一项都应包含 box + OCR 内容）
+                # 5) 解析模型 JSON（每一项都应包含 box + OCR 内容）
                 items = self.parse_llm_result(llm_payload)
 
-                # 5) 对每个题目执行：按坐标真实切图 -> 上传 MinIO -> OCR数据入库
+                # 6) 对每个题目执行：按坐标真实切图 -> 上传 MinIO -> OCR数据入库
                 for idx, item in enumerate(items, start=1):
                     box_2d = item.get("question_box_2d")
                     if not isinstance(box_2d, list) or len(box_2d) != 4:
@@ -141,7 +164,7 @@ class AIPipelineService:
 
                 db.commit()
 
-            # 6) 全部成功：进入人工质检阶段
+            # 7) 全部成功：进入人工质检阶段
             raw_paper.status = "qc_pending"
             db.commit()
             logger.info(
@@ -163,63 +186,137 @@ class AIPipelineService:
         finally:
             db.close()
 
-    def fetch_taxonomy_tree(self) -> Any:
-        response = requests.get(self.TAXONOMY_TREE_URL, timeout=20)
-        response.raise_for_status()
-        return response.json()
-
-    def format_taxonomy_as_markdown(self, payload: Any) -> str:
-        lines: list[str] = ["# 知识点大纲"]
-
-        def walk(node: Any, depth: int = 0) -> None:
-            if isinstance(node, dict):
-                name = node.get("name") or node.get("title") or node.get("label")
-                if name:
-                    lines.append(f"{'  ' * depth}- {name}")
-                children = node.get("children") or []
-                if isinstance(children, list):
-                    for child in children:
-                        walk(child, depth + 1)
-            elif isinstance(node, list):
-                for child in node:
-                    walk(child, depth)
-
-        walk(payload, 0)
+    @classmethod
+    def format_taxonomy_to_markdown(
+        cls,
+        taxonomy_tree: list,
+        level: int = 0,
+    ) -> str:
+        lines: list[str] = []
+        indent = "  " * level
+        for node in taxonomy_tree:
+            if not isinstance(node, dict):
+                continue
+            name = str(node.get("name") or node.get("title") or node.get("label") or "").strip()
+            if not name:
+                continue
+            lines.append(f"{indent}- {name}")
+            children = node.get("children")
+            if isinstance(children, list) and children:
+                child_md = cls.format_taxonomy_to_markdown(children, level + 1)
+                if child_md:
+                    lines.append(child_md)
         return "\n".join(lines)
 
-    def build_prompt(self, taxonomy_markdown: str) -> str:
-        return (
-            "你是数学试卷结构化助手。请识别图片中的每一道题，并返回 JSON 数组。\n"
-            "每个元素必须包含字段：\n"
-            "- problem_number\n"
-            "- question_type\n"
-            "- question_box_2d (四个 0~1000 归一化坐标: [x1,y1,x2,y2])\n"
-            "- content_latex\n"
-            "- options (数组)\n"
-            "- tags (数组)\n\n"
-            "请严格返回 JSON，不要额外解释。\n\n"
-            f"可用知识点如下：\n{taxonomy_markdown}"
+    async def fetch_taxonomy_tree(self) -> list:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.get(self.taxonomy_tree_url)
+            response.raise_for_status()
+            payload = response.json()
+
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            for key in ("items", "data", "children"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    return value
+            return [payload]
+        return []
+
+    def get_taxonomy_markdown(self) -> str:
+        cached = self.TAXONOMY_TREE_CACHE.get(self.TAXONOMY_TREE_CACHE_KEY)
+        if isinstance(cached, str) and cached:
+            return cached
+
+        taxonomy_tree = asyncio.run(self.fetch_taxonomy_tree())
+        markdown_body = self.format_taxonomy_to_markdown(taxonomy_tree)
+        markdown = "# 知识点大纲\n" + (markdown_body or "- （暂无知识点）")
+        self.TAXONOMY_TREE_CACHE[self.TAXONOMY_TREE_CACHE_KEY] = markdown
+        return markdown
+
+    def build_exam_paper_decomposer_prompt(self, db, taxonomy_markdown: str) -> str:
+        prompt_template = db.execute(
+            select(PromptTemplate).where(PromptTemplate.name == "exam_paper_decomposer")
+        ).scalar_one_or_none()
+        if prompt_template is None:
+            raise RuntimeError("Prompt template 'exam_paper_decomposer' not found")
+
+        template = prompt_template.content or ""
+        if "{{TAXONOMY_TREE}}" in template:
+            return template.replace("{{TAXONOMY_TREE}}", taxonomy_markdown)
+
+        # 兼容历史模板未放置占位符的情况。
+        return f"{template}\n\n{taxonomy_markdown}"
+
+    def get_model_name_from_settings(self) -> str:
+        # 优先使用显式配置 GEMINI_MODEL_NAME，兼容历史配置 MODEL_TIER_PRO。
+        model_name = (
+            settings.GEMINI_MODEL_NAME.strip()
+            if settings.GEMINI_MODEL_NAME
+            else settings.MODEL_TIER_PRO.strip()
+        )
+        if not model_name:
+            raise RuntimeError("Model name is required (set GEMINI_MODEL_NAME or MODEL_TIER_PRO)")
+        return model_name
+
+    def _resolve_gemini_key(self) -> tuple[str, str | None]:
+        key_data = self.key_relay.get_key_sync(platform="Gemini")
+        api_key = str(key_data.get("key") or key_data.get("apiKey") or "").strip()
+        key_id = (
+            str(key_data.get("keyId") or key_data.get("id") or "").strip() or None
+        )
+        if not api_key:
+            raise RuntimeError("Key relay returned empty API key")
+        return api_key, key_id
+
+    def call_gemini_api(self, prompt: str, image_bytes: bytes, model_name: str) -> Any:
+        api_key, key_id = self._resolve_gemini_key()
+
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model_name}:generateContent?key={api_key}"
         )
 
-    def call_gemini_api(self, prompt: str, image_bytes: bytes) -> Any:
-        """
-        这里是大模型调用占位函数（mock）。
+        payload = {
+            "system_instruction": {"parts": [{"text": prompt}]},
+            "generationConfig": {
+                "temperature": 0.1,
+                "responseMimeType": "application/json",
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": "请按系统提示词要求解析这张试卷图片，并只输出 JSON 数组。"},
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": base64.b64encode(image_bytes).decode("utf-8"),
+                            }
+                        },
+                    ],
+                }
+            ],
+        }
 
-        你后续接 KeyRelay 时，可在这里替换为真实 Gemini API 调用。
-        约定返回：list[dict] 或 JSON 字符串。
-        """
-        _ = prompt
-        _ = image_bytes
-        return [
-            {
-                "problem_number": "1",
-                "question_type": "single_choice",
-                "question_box_2d": [50, 60, 950, 360],
-                "content_latex": "已识别题干（示例）",
-                "options": ["A", "B", "C", "D"],
-                "tags": ["函数", "导数"],
-            }
-        ]
+        response = requests.post(endpoint, json=payload, timeout=90)
+        if response.status_code >= 400:
+            if key_id:
+                self.key_relay.report_error_sync(
+                    key_id=key_id,
+                    raw_error=f"HTTP_{response.status_code}: {response.text[:500]}",
+                )
+            response.raise_for_status()
+        result = response.json()
+
+        text = (
+            result.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "[]")
+        )
+        return text
 
     def parse_llm_result(self, payload: Any) -> list[dict[str, Any]]:
         if isinstance(payload, list):

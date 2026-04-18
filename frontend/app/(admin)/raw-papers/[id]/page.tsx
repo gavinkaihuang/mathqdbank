@@ -10,6 +10,7 @@ import {
   FileStack,
   Loader2,
   User,
+  X,
 } from "lucide-react";
 
 type PaperStatus = "pending" | "processing" | "qc_pending" | "published";
@@ -22,6 +23,7 @@ interface RawPaperDetail {
   status: PaperStatus;
   total_questions: number;
   uploader_name: string;
+  preview_urls: string[];
 }
 
 type RawPaperDetailApiResponse = {
@@ -34,6 +36,9 @@ type RawPaperDetailApiResponse = {
   questions?: Array<{ id: number }>;
   recognized_count?: number;
   uploader_name?: string | null;
+  original_url?: string | null;
+  original_urls?: string[];
+  page_urls?: string[];
   detail?: string;
 };
 
@@ -74,6 +79,10 @@ function toViewModel(api: RawPaperDetailApiResponse): RawPaperDetail {
     status: mapPaperStatus(api.status),
     total_questions: totalQuestions,
     uploader_name: api.uploader_name?.trim() ? api.uploader_name : "系统导入",
+    preview_urls:
+      (Array.isArray(api.original_urls) ? api.original_urls.filter(Boolean) : []) ||
+      (api.original_url ? [api.original_url] : []) ||
+      (Array.isArray(api.page_urls) ? api.page_urls.filter(Boolean) : []),
   };
 }
 
@@ -106,6 +115,8 @@ export default function PaperDetailsPage() {
   const [paper, setPaper] = useState<RawPaperDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [previewIndex, setPreviewIndex] = useState(0);
+  const [showLightbox, setShowLightbox] = useState(false);
 
   useEffect(() => {
     const fetchPaper = async () => {
@@ -121,7 +132,9 @@ export default function PaperDetailsPage() {
         if (!response.ok) {
           throw new Error(data.detail || `加载试卷详情失败 (HTTP ${response.status})`);
         }
-        setPaper(toViewModel(data));
+        const viewPaper = toViewModel(data);
+        setPaper(viewPaper);
+        setPreviewIndex(0);
       } catch (e) {
         setError(e instanceof Error ? e.message : "加载试卷详情失败");
       } finally {
@@ -140,6 +153,14 @@ export default function PaperDetailsPage() {
     }
     return statusConfig[paper.status] ?? statusConfig.pending;
   }, [paper]);
+
+  const currentPreviewUrl = useMemo(() => {
+    if (!paper || paper.preview_urls.length === 0) {
+      return "";
+    }
+    const safeIndex = Math.min(Math.max(previewIndex, 0), paper.preview_urls.length - 1);
+    return paper.preview_urls[safeIndex] || "";
+  }, [paper, previewIndex]);
 
   if (isLoading) {
     return (
@@ -251,12 +272,76 @@ export default function PaperDetailsPage() {
 
           <aside className="min-h-[540px] rounded-xl border border-slate-700 bg-slate-800 p-5 text-slate-100">
             <p className="text-sm font-semibold tracking-wide text-slate-200">防伪原卷预览</p>
-            <div className="mt-4 flex h-[calc(100%-2rem)] items-center justify-center rounded-lg border border-slate-600 bg-slate-900/60 p-4 text-center">
-              <p className="text-sm text-slate-300">原始 PDF / 扫描件长图预览区</p>
-            </div>
+            {currentPreviewUrl ? (
+              <div className="mt-4 flex h-[calc(100%-2rem)] flex-col gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowLightbox(true)}
+                  className="group relative flex-1 overflow-hidden rounded-lg border border-slate-600 bg-slate-900/60"
+                >
+                  <img
+                    src={currentPreviewUrl}
+                    alt={`原卷预览第 ${previewIndex + 1} 页`}
+                    className="h-full w-full object-contain"
+                  />
+                  <div className="absolute inset-0 flex items-end justify-center bg-black/0 pb-3 opacity-0 transition group-hover:bg-black/30 group-hover:opacity-100">
+                    <span className="rounded-full bg-white/90 px-3 py-1 text-xs font-medium text-slate-800">
+                      点击放大查看
+                    </span>
+                  </div>
+                </button>
+
+                {paper.preview_urls.length > 1 ? (
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {paper.preview_urls.map((url, idx) => (
+                      <button
+                        type="button"
+                        key={`${url}-${idx}`}
+                        onClick={() => setPreviewIndex(idx)}
+                        className={`h-14 w-14 shrink-0 overflow-hidden rounded-md border ${
+                          idx === previewIndex ? "border-white" : "border-slate-600"
+                        }`}
+                      >
+                        <img
+                          src={url}
+                          alt={`缩略图 ${idx + 1}`}
+                          className="h-full w-full object-cover"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="mt-4 flex h-[calc(100%-2rem)] items-center justify-center rounded-lg border border-slate-600 bg-slate-900/60 p-4 text-center">
+                <p className="text-sm text-slate-300">暂无可预览的原卷图片</p>
+              </div>
+            )}
           </aside>
         </div>
       </div>
+
+      {showLightbox && currentPreviewUrl ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setShowLightbox(false)}
+        >
+          <button
+            type="button"
+            onClick={() => setShowLightbox(false)}
+            className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20"
+            aria-label="关闭预览"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <img
+            src={currentPreviewUrl}
+            alt="原卷放大预览"
+            className="max-h-[92vh] max-w-[92vw] object-contain"
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
