@@ -11,6 +11,7 @@ from app.core.exceptions import (
     http_exception_handler,
     validation_error_handler,
 )
+from app.core.prisma_client import connect_prisma, disconnect_prisma
 from app.services.prompts import init_prompts
 
 app = FastAPI(title=settings.APP_NAME)
@@ -25,12 +26,18 @@ app.add_exception_handler(RequestValidationError, validation_error_handler)  # t
 
 
 @app.on_event("startup")
-def on_startup() -> None:
+async def on_startup() -> None:
+    await connect_prisma()
     db = SessionLocal()
     try:
         init_prompts(db)
     finally:
         db.close()
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    await disconnect_prisma()
 
 
 @app.get("/ping")

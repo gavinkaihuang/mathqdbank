@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     APP_NAME: str = "MathQBank"
     DATABASE_URL: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/mathqbank"
+    IS_DEBUG: bool = False
     MODEL_TIER_FLASH: str = "gemini-1.5-flash"
     MODEL_TIER_PRO: str = "gemini-1.5-pro"
     GEMINI_MODEL_NAME: str = ""
@@ -24,6 +25,7 @@ class Settings(BaseSettings):
     MINIO_ACCESS_KEY: str
     MINIO_SECRET_KEY: str
     MINIO_BUCKET_NAME: str = "mathqbank"
+    MINIO_BUCKET_4_TUBOOK_NAME: str = "math-pdf-images"
     MINIO_USE_SSL: bool = False
 
     @field_validator("MINIO_ENDPOINT")
@@ -43,7 +45,12 @@ class Settings(BaseSettings):
             raise ValueError("MINIO_ENDPOINT must be host:port or http(s)://host:port")
         return endpoint
 
-    @field_validator("MINIO_ACCESS_KEY", "MINIO_SECRET_KEY", "MINIO_BUCKET_NAME")
+    @field_validator(
+        "MINIO_ACCESS_KEY",
+        "MINIO_SECRET_KEY",
+        "MINIO_BUCKET_NAME",
+        "MINIO_BUCKET_4_TUBOOK_NAME",
+    )
     @classmethod
     def validate_non_empty_minio_fields(cls, value: str) -> str:
         normalized = value.strip()

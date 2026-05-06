@@ -25,6 +25,14 @@ from app.schemas.domain import (
 	TagUpdate,
 )
 from app.schemas.pagination import PageResponse
+from app.schemas.tasks import (
+	DeleteTasksRequest,
+	DeleteTasksResponse,
+	ExtractionTaskResponse,
+	RetryTaskRequest,
+	SyncTasksResponse,
+	UpdateTaskRequest,
+)
 
 __all__ = [
 	"LiveQuestionResponse",
@@ -50,4 +58,10 @@ __all__ = [
 	"TagUpdate",
 	"TagResponse",
 	"PageResponse",
+	"ExtractionTaskResponse",
+	"SyncTasksResponse",
+	"RetryTaskRequest",
+	"UpdateTaskRequest",
+	"DeleteTasksRequest",
+	"DeleteTasksResponse",
 ]

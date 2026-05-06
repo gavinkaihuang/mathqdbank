@@ -1,0 +1,81 @@
+generator client {
+  provider = "prisma-client-py"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum KnowledgeItemType {
+  CONCEPT
+  FORMULA
+  THEOREM
+  EXAMPLE
+  SOLUTION_STRATEGY
+  COMMON_MISTAKE
+}
+
+model KnowledgePoint {
+  id          Int     @id @default(autoincrement())
+  code        String? @unique
+  name        String
+  description String?
+
+  parentId Int?
+  parent   KnowledgePoint?  @relation("KnowledgeTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children KnowledgePoint[] @relation("KnowledgeTree")
+
+  items     KnowledgeItem[]
+  questions Question[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([parentId])
+  @@map("knowledge_points")
+}
+
+model KnowledgeItem {
+  id         Int               @id @default(autoincrement())
+  content    String            @db.Text
+  expertNote String?           @map("expert_note") @db.Text
+  itemType   KnowledgeItemType @map("item_type")
+  embedding  Unsupported("vector(768)")
+
+  knowledgePointId Int            @map("knowledge_point_id")
+  knowledgePoint   KnowledgePoint @relation(fields: [knowledgePointId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([knowledgePointId])
+  @@map("knowledge_items")
+}
+
+model Question {
+  id             Int             @id @default(autoincrement())
+  stem           String          @db.Text
+  answer         String?         @db.Text
+  difficulty     Float?
+  source         String?
+  knowledgePointId Int?          @map("knowledge_point_id")
+  knowledgePoint KnowledgePoint? @relation(fields: [knowledgePointId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([knowledgePointId])
+  @@map("questions")
+}
+
+model ExtractionTask {
+  id         Int      @id @default(autoincrement())
+  minio_path String   @unique
+  status     String   @default("PENDING")
+  json_result Json?
+  error_log  String?
+  updated_at DateTime @updatedAt
+
+  @@map("extraction_tasks")
+}

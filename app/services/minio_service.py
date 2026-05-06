@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
@@ -88,8 +89,22 @@ class MinioService:
                 content_type=content_type or "application/octet-stream",
             )
         except S3Error:
-            logger.exception("Failed to upload object to MinIO")
+            logger.exception(
+                "Failed to upload object to MinIO: bucket=%s object=%s content_type=%s bytes=%s",
+                self.bucket_name,
+                object_name,
+                content_type,
+                length,
+            )
             raise
+
+        logger.info(
+            "Uploaded object to MinIO: bucket=%s object=%s content_type=%s bytes=%s",
+            self.bucket_name,
+            object_name,
+            content_type,
+            length,
+        )
 
         return object_name
 
@@ -113,9 +128,28 @@ class MinioService:
     def get_object_bytes(self, object_path: str) -> bytes:
         """Read object bytes by relative object name or full URL."""
         object_name = self.extract_object_name(object_path)
+        logger.info(
+            "Reading object from MinIO: bucket=%s object=%s",
+            self.bucket_name,
+            object_name,
+        )
         response = self.client.get_object(self.bucket_name, object_name)
         try:
-            return response.read()
+            payload = response.read()
+            logger.info(
+                "Read object from MinIO: bucket=%s object=%s bytes=%s",
+                self.bucket_name,
+                object_name,
+                len(payload),
+            )
+            return payload
+        except Exception:
+            logger.exception(
+                "Failed to read object from MinIO: bucket=%s object=%s",
+                self.bucket_name,
+                object_name,
+            )
+            raise
         finally:
             response.close()
             response.release_conn()
@@ -142,3 +176,11 @@ class MinioService:
         scheme = "https" if self._secure else "http"
         encoded_object_name = quote(object_name)
         return f"{scheme}://{self._raw_endpoint}/{self.bucket_name}/{encoded_object_name}"
+
+    def build_presigned_get_url(self, object_name: str, expires_seconds: int = 3600) -> str:
+        normalized = self.extract_object_name(object_name)
+        return self.client.presigned_get_object(
+            bucket_name=self.bucket_name,
+            object_name=normalized,
+            expires=timedelta(seconds=expires_seconds),
+        )

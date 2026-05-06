@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Library,
   Terminal,
+  ListChecks,
 } from "lucide-react";
 
 type NavItem = {
@@ -70,6 +71,18 @@ const navSections: NavSection[] = [
         label: "题库大厅",
         sublabel: "Question Bank",
         icon: Library,
+      },
+      {
+        href: "/tasks",
+        label: "解析任务",
+        sublabel: "Extraction Tasks",
+        icon: ListChecks,
+      },
+      {
+        href: "/math-ingestion",
+        label: "一本涂书入库",
+        sublabel: "Math Ingestion",
+        icon: ListChecks,
       },
     ],
   },
