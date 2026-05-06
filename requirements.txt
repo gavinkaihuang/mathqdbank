@@ -14,3 +14,4 @@ Pillow>=10.4,<12.0
 prisma>=0.15,<1.0
 google-genai>=1.19,<2.0
 filetype>=1.2,<2.0
+tqdm>=4.66,<5.0
