@@ -5,7 +5,8 @@ import logging
 import time
 from typing import Any
 
-import httpx
+from google import genai
+from google.genai.errors import APIError
 
 from app.core.config import settings
 from app.core.prisma_client import connect_prisma, prisma
@@ -14,7 +15,7 @@ from app.services.key_manager import KeyRelayClient
 
 logger = logging.getLogger(__name__)
 
-_EMBEDDING_MODEL = "text-embedding-004"
+_EMBEDDING_MODEL = "models/text-embedding-004"
 _EMBEDDING_DIM = 768
 
 _CONTENT_TYPE_TO_ITEM_TYPE = {
@@ -47,36 +48,29 @@ async def _resolve_gemini_api_key() -> tuple[str, str | None]:
 
 
 async def _embed_text(
-    client: httpx.AsyncClient,
+    client: genai.Client,
     text: str,
     *,
-    api_key: str,
     key_id: str | None,
+    model: str = _EMBEDDING_MODEL,
 ) -> list[float]:
-    endpoint = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{_EMBEDDING_MODEL}:embedContent?key={api_key}"
-    )
-    payload = {
-        "model": f"models/{_EMBEDDING_MODEL}",
-        "content": {"parts": [{"text": text}]},
-    }
-
-    response = await client.post(endpoint, json=payload)
-    if response.status_code >= 400:
+    try:
+        result = await client.aio.models.embed_content(
+            model=model,
+            contents=text,
+        )
+    except APIError as exc:
         if key_id:
             await KeyRelayClient().report_error(
                 key_id=key_id,
-                raw_error=f"HTTP_{response.status_code}: {response.text[:500]}",
+                raw_error=f"HTTP_{exc.code} {exc.status}: {str(exc.message)[:500]}",
             )
-        response.raise_for_status()
+        raise
 
-    data = response.json()
-    raw_values = (
-        data.get("embedding", {}).get("values")
-        if isinstance(data, dict)
-        else None
-    )
+    raw_values = None
+    if result.embeddings and len(result.embeddings) > 0:
+        raw_values = result.embeddings[0].values
+
     if not isinstance(raw_values, list):
         raise RuntimeError("Gemini embedding response missing embedding.values")
 
@@ -112,6 +106,7 @@ async def save_extraction_to_db(extraction: BookPageExtraction, kp_id: str) -> N
 
     await connect_prisma()
     api_key, key_id = await _resolve_gemini_api_key()
+    gemini_client = genai.Client(api_key=api_key)
     logger.info(
         "[IMPORTER] key resolved: kp_id=%s key_source=%s",
         knowledge_point_id,
@@ -121,52 +116,50 @@ async def save_extraction_to_db(extraction: BookPageExtraction, kp_id: str) -> N
     saved_items = 0
     saved_questions = 0
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            for item in extraction.items:
-                content = item.latex_content.strip()
-                if not content:
-                    continue
+        for item in extraction.items:
+            content = item.latex_content.strip()
+            if not content:
+                continue
 
-                embedding = await _embed_text(
-                    client,
+            embedding = await _embed_text(
+                gemini_client,
+                content,
+                key_id=key_id,
+            )
+            item_type = _CONTENT_TYPE_TO_ITEM_TYPE[item.content_type]
+
+            await _execute_raw(
+                (
+                    'INSERT INTO knowledge_items '
+                    '(content, expert_note, item_type, embedding, knowledge_point_id) '
+                    'VALUES ($1, $2, $3::"KnowledgeItemType", $4::vector, $5)'
+                ),
+                [
                     content,
-                    api_key=api_key,
-                    key_id=key_id,
-                )
-                item_type = _CONTENT_TYPE_TO_ITEM_TYPE[item.content_type]
+                    item.expert_note,
+                    item_type,
+                    _vector_literal(embedding),
+                    knowledge_point_id,
+                ],
+            )
+            saved_items += 1
 
-                await _execute_raw(
-                    (
-                        'INSERT INTO knowledge_items '
-                        '(content, expert_note, item_type, embedding, knowledge_point_id) '
-                        'VALUES ($1, $2, $3::"KnowledgeItemType", $4::vector, $5)'
-                    ),
-                    [
-                        content,
-                        item.expert_note,
-                        item_type,
-                        _vector_literal(embedding),
-                        knowledge_point_id,
-                    ],
-                )
-                saved_items += 1
-
-            for question in extraction.questions:
-                await _execute_raw(
-                    (
-                        "INSERT INTO questions "
-                        "(stem, answer, difficulty, source, knowledge_point_id) "
-                        "VALUES ($1, $2, $3, $4, $5)"
-                    ),
-                    [
-                        question.body,
-                        question.solution,
-                        float(question.difficulty),
-                        "gemini_importer",
-                        knowledge_point_id,
-                    ],
-                )
-                saved_questions += 1
+        for question in extraction.questions:
+            await _execute_raw(
+                (
+                    "INSERT INTO questions "
+                    "(stem, answer, difficulty, source, knowledge_point_id) "
+                    "VALUES ($1, $2, $3, $4, $5)"
+                ),
+                [
+                    question.body,
+                    question.solution,
+                    float(question.difficulty),
+                    "gemini_importer",
+                    knowledge_point_id,
+                ],
+            )
+            saved_questions += 1
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         logger.info(

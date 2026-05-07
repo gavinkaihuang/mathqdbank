@@ -8,6 +8,7 @@ from typing import Any
 
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 
 from app.core.config import settings
 from app.models.parsing import BookPageExtraction
@@ -72,71 +73,141 @@ class GeminiParserService:
             self.key_id or "",
         )
 
-        print(f"DEBUG: Selected Model is {self.model_name}")
+        # print(f"**********************DEBUG: Selected Model is {self.model_name}, keyID='{self.key_id}, keySource={self.key_source}")
         self.client = genai.Client(api_key=api_key)
+
+    async def _refresh_key_from_relay(self) -> bool:
+        try:
+            key_data = await KeyRelayClient().get_key(platform="Gemini")
+            api_key, key_id = _extract_key_and_id(key_data)
+            prev_key_id = self.key_id or ""
+            self.api_key = api_key
+            self.key_id = key_id
+            self.key_source = "relay"
+            self.client = genai.Client(api_key=api_key)
+            logger.info(
+                "[GEMINI] switched key after retryable error: prev_key_id=%s new_key_id=%s",
+                prev_key_id,
+                self.key_id or "",
+            )
+            return True
+        except Exception:
+            logger.exception("[GEMINI] failed to refresh key from relay after retryable error")
+            return False
 
     async def parse_math_page(self, image_bytes: bytes) -> BookPageExtraction:
         if not image_bytes:
             raise ValueError("image_bytes cannot be empty")
 
+        print(f"--------------------DEBUG: Selected Model is {self.model_name}, keyID='{self.key_id}, keySource={self.key_source}")
+            
         mime_type = _detect_mime_type(image_bytes)
-        started = time.perf_counter()
-        logger.info(
-            "[GEMINI] parse started: model=%s gemini_key=%s mime=%s image_bytes=%s",
-            self.model_name,
-            self.api_key,
-            mime_type,
-            len(image_bytes),
-        )
-
-        try:
-            response = await self.client.aio.models.generate_content(
-                model=self.model_name,
-                contents=types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_text(
-                            text="请解析这张数学页面截图，并按约定的 JSON Schema 返回。"
-                        ),
-                        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                    ],
-                ),
-                config=types.GenerateContentConfig(
-                    system_instruction=_SYSTEM_PROMPT,
-                    response_mime_type="application/json",
-                    response_schema=BookPageExtraction,
-                ),
-            )
-
-            if isinstance(response.parsed, BookPageExtraction):
-                result = response.parsed
-            elif response.parsed is not None:
-                result = BookPageExtraction.model_validate(response.parsed)
-            elif response.text:
-                result = BookPageExtraction.model_validate(json.loads(response.text))
-            else:
-                raise RuntimeError("Gemini returned empty response")
-
-            elapsed_ms = int((time.perf_counter() - started) * 1000)
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            started = time.perf_counter()
             logger.info(
-                "[GEMINI] parse finished: elapsed_ms=%s items=%s questions=%s",
-                elapsed_ms,
-                len(result.items),
-                len(result.questions),
+                "[GEMINI] parse started: attempt=%s model=%s gemini_key=%s mime=%s image_bytes=%s",
+                attempt,
+                self.model_name,
+                self.api_key,
+                mime_type,
+                len(image_bytes),
             )
-            return result
-        except Exception:
-            elapsed_ms = int((time.perf_counter() - started) * 1000)
-            if self.key_id:
-                try:
-                    KeyRelayClient().report_error_sync(
-                        key_id=self.key_id,
-                        raw_error=f"GEMINI_PARSE_FAILED elapsed_ms={elapsed_ms}",
+
+            try:
+                response = await self.client.aio.models.generate_content(
+                    model=self.model_name,
+                    contents=types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_text(
+                                text="请解析这张数学页面截图，并按约定的 JSON Schema 返回。"
+                            ),
+                            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                        ],
+                    ),
+                    config=types.GenerateContentConfig(
+                        system_instruction=_SYSTEM_PROMPT,
+                        response_mime_type="application/json",
+                        response_schema=BookPageExtraction,
+                    ),
+                )
+
+                if isinstance(response.parsed, BookPageExtraction):
+                    result = response.parsed
+                elif response.parsed is not None:
+                    result = BookPageExtraction.model_validate(response.parsed)
+                elif response.text:
+                    result = BookPageExtraction.model_validate(json.loads(response.text))
+                else:
+                    raise RuntimeError("Gemini returned empty response")
+
+                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                logger.info(
+                    "[GEMINI] parse finished: attempt=%s elapsed_ms=%s items=%s questions=%s",
+                    attempt,
+                    elapsed_ms,
+                    len(result.items),
+                    len(result.questions),
+                )
+                return result
+            except APIError as exc:
+                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                status_code = int(exc.code) if exc.code is not None else 0
+                is_retryable_key_error = status_code in {429, 503}
+                raw_error = f"HTTP_{exc.code} {exc.status}: {str(exc.message)[:300]} elapsed_ms={elapsed_ms}"
+                logger.error(
+                    "[GEMINI] api error: attempt=%s code=%s status=%s is_retryable_key_error=%s key_id=%s elapsed_ms=%s",
+                    attempt,
+                    exc.code,
+                    exc.status,
+                    is_retryable_key_error,
+                    self.key_id or "",
+                    elapsed_ms,
+                )
+                if self.key_id:
+                    try:
+                        await KeyRelayClient().report_error(
+                            key_id=self.key_id,
+                            raw_error=raw_error,
+                        )
+                        logger.info(
+                            "[GEMINI] key relay notified: key_id=%s code=%s",
+                            self.key_id,
+                            exc.code,
+                        )
+                    except Exception:
+                        logger.exception("[GEMINI] key relay report failed: key_id=%s", self.key_id)
+
+                can_retry_with_new_key = (
+                    is_retryable_key_error
+                    and attempt < max_attempts
+                    and self.key_source == "relay"
+                )
+                if can_retry_with_new_key:
+                    logger.warning(
+                        "[GEMINI] retryable API error(code=%s), requesting a new relay key and retrying once: key_id=%s",
+                        status_code,
+                        self.key_id or "",
                     )
-                except Exception:
-                    logger.exception("[GEMINI] key relay report failed: key_id=%s", self.key_id)
-            logger.exception("[GEMINI] parse failed: elapsed_ms=%s", elapsed_ms)
-            raise
+                    if await self._refresh_key_from_relay():
+                        continue
+
+                raise
+            except Exception:
+                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                if self.key_id:
+                    try:
+                        await KeyRelayClient().report_error(
+                            key_id=self.key_id,
+                            raw_error=f"GEMINI_PARSE_FAILED elapsed_ms={elapsed_ms}",
+                        )
+                    except Exception:
+                        logger.exception("[GEMINI] key relay report failed: key_id=%s", self.key_id)
+                logger.exception("[GEMINI] parse failed: attempt=%s elapsed_ms=%s", attempt, elapsed_ms)
+                raise
+
+        raise RuntimeError("Gemini parse failed after retries")
 
 
 def _extract_key_and_id(key_data: dict[str, Any]) -> tuple[str, str | None]:
@@ -148,6 +219,11 @@ def _extract_key_and_id(key_data: dict[str, Any]) -> tuple[str, str | None]:
 
 
 _parser_service: GeminiParserService | None = None
+
+
+def _reset_parser_service() -> None:
+    global _parser_service
+    _parser_service = None
 
 
 def get_gemini_parser_service() -> GeminiParserService:

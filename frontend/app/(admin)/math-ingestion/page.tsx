@@ -106,7 +106,7 @@ export default function MathIngestionPage() {
       }
 
       if (!selectedId || !rows.some((row) => row.id === selectedId)) {
-        setSelectedId(rows[0].id);
+        setSelectedId(null);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载任务失败");
@@ -252,6 +252,18 @@ export default function MathIngestionPage() {
     });
     return copied;
   }, [tasks, sortOrder]);
+
+  useEffect(() => {
+    if (sortedTasks.length === 0) {
+      setSelectedId(null);
+      setSelectedTask(null);
+      return;
+    }
+    if (!selectedId || !sortedTasks.some((task) => task.id === selectedId)) {
+      setCurrentPage(1);
+      setSelectedId(sortedTasks[0].id);
+    }
+  }, [sortedTasks, selectedId]);
 
   const totalPages = Math.max(1, Math.ceil(sortedTasks.length / pageSize));
 
