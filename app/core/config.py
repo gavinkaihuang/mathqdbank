@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     IS_DEBUG: bool = False
     MODEL_TIER_FLASH: str = "gemini-1.5-flash"
     MODEL_TIER_PRO: str = "gemini-1.5-pro"
+    EMBEDDING_MODEL: str = "models/text-embedding-004"
     GEMINI_MODEL_NAME: str = ""
     GEMINI_API_KEY: str = ""
     TAXONOMY_TREE_URL: str = "http://192.168.44.163:8006/api/v1/taxonomy/tree"

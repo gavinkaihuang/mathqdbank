@@ -177,3 +177,6 @@ curl -s http://localhost:8000/api/v1/taxonomy/tree | python3 -m json.tool
 
 # 查看当前可用的模型， 有些模型没有免费额度
 https://aistudio.google.com/rate-limit?timeRange=last-28-days&project=gen-lang-client-0334791829
+
+# 查看可用的模型列表
+curl https://generativelanguage.googleapis.com/v1/models?key=YOUR_API_KEY

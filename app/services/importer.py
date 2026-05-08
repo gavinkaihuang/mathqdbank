@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from google import genai
 from google.genai.errors import APIError
@@ -15,8 +18,9 @@ from app.services.key_manager import KeyRelayClient
 
 logger = logging.getLogger(__name__)
 
-_EMBEDDING_MODEL = "models/text-embedding-004"
+_EMBEDDING_MODEL = settings.EMBEDDING_MODEL
 _EMBEDDING_DIM = 768
+_DEBUG_DUMP_DIR = Path("runtime_logs/llm_debug")
 
 _CONTENT_TYPE_TO_ITEM_TYPE = {
     ContentTypeEnum.METHOD: "SOLUTION_STRATEGY",
@@ -47,17 +51,41 @@ async def _resolve_gemini_api_key() -> tuple[str, str | None]:
     return _extract_key_and_id(key_data)
 
 
+def _llm_debug_enabled() -> bool:
+    return settings.IS_DEBUG or settings.LLM_DEBUG_ENABLED
+
+
+def _dump_llm_debug_payload(payload: dict[str, Any]) -> None:
+    if not _llm_debug_enabled():
+        return
+
+    try:
+        _DEBUG_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        file_name = f"embedding_{ts}_{uuid4().hex[:8]}.json"
+        file_path = _DEBUG_DUMP_DIR / file_name
+        file_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        logger.info("[IMPORTER] LLM debug payload saved: path=%s", file_path)
+    except Exception:
+        logger.exception("[IMPORTER] failed to save LLM debug payload")
+
+
 async def _embed_text(
     client: genai.Client,
     text: str,
     *,
     key_id: str | None,
+    debug_context: dict[str, Any] | None = None,
     model: str = _EMBEDDING_MODEL,
 ) -> list[float]:
     try:
         result = await client.aio.models.embed_content(
             model=model,
             contents=text,
+            config={"output_dimensionality": _EMBEDDING_DIM},
         )
     except APIError as exc:
         if key_id:
@@ -70,6 +98,24 @@ async def _embed_text(
     raw_values = None
     if result.embeddings and len(result.embeddings) > 0:
         raw_values = result.embeddings[0].values
+
+    response_payload = None
+    if hasattr(result, "model_dump"):
+        response_payload = result.model_dump(exclude_none=True)
+
+    _dump_llm_debug_payload(
+        {
+            "event": "embed_content_response",
+            "model": model,
+            "key_id": key_id,
+            "text_length": len(text),
+            "text_preview": text[: settings.LLM_DEBUG_MAX_TEXT_CHARS],
+            "context": debug_context or {},
+            "embedding_count": len(result.embeddings or []),
+            "first_embedding_dim": len(raw_values) if isinstance(raw_values, list) else None,
+            "response": response_payload,
+        }
+    )
 
     if not isinstance(raw_values, list):
         raise RuntimeError("Gemini embedding response missing embedding.values")
@@ -116,7 +162,7 @@ async def save_extraction_to_db(extraction: BookPageExtraction, kp_id: str) -> N
     saved_items = 0
     saved_questions = 0
     try:
-        for item in extraction.items:
+        for item_index, item in enumerate(extraction.items):
             content = item.latex_content.strip()
             if not content:
                 continue
@@ -125,6 +171,11 @@ async def save_extraction_to_db(extraction: BookPageExtraction, kp_id: str) -> N
                 gemini_client,
                 content,
                 key_id=key_id,
+                debug_context={
+                    "kp_id": knowledge_point_id,
+                    "item_index": item_index,
+                    "item_content_type": item.content_type,
+                },
             )
             item_type = _CONTENT_TYPE_TO_ITEM_TYPE[item.content_type]
 
@@ -132,7 +183,7 @@ async def save_extraction_to_db(extraction: BookPageExtraction, kp_id: str) -> N
                 (
                     'INSERT INTO knowledge_items '
                     '(content, expert_note, item_type, embedding, knowledge_point_id) '
-                    'VALUES ($1, $2, $3::"KnowledgeItemType", $4::vector, $5)'
+                    'VALUES ($1, $2, $3, $4::vector, $5)'
                 ),
                 [
                     content,
@@ -147,7 +198,7 @@ async def save_extraction_to_db(extraction: BookPageExtraction, kp_id: str) -> N
         for question in extraction.questions:
             await _execute_raw(
                 (
-                    "INSERT INTO questions "
+                    "INSERT INTO kp_questions "
                     "(stem, answer, difficulty, source, knowledge_point_id) "
                     "VALUES ($1, $2, $3, $4, $5)"
                 ),
