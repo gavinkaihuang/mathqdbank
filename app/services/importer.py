@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from google import genai
 from google.genai.errors import APIError
+from prisma._raw_query import deserialize_raw_results
 
 from app.core.config import settings
 from app.core.prisma_client import connect_prisma, prisma
@@ -140,6 +141,34 @@ async def _execute_raw(query: str, parameters: list[Any]) -> Any:
     )
 
 
+async def _query_raw(query: str, parameters: list[Any]) -> list[dict[str, Any]]:
+    raw = await prisma._execute(  # type: ignore[attr-defined]
+        method="query_raw",
+        arguments={
+            "query": query,
+            "parameters": json.dumps(parameters),
+        },
+    )
+    if isinstance(raw, dict):
+        payload = raw.get("data", {}).get("result") if isinstance(raw.get("data"), dict) else raw
+        if isinstance(payload, dict) and {"columns", "types", "rows"}.issubset(payload.keys()):
+            rows = deserialize_raw_results(payload)
+            return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+async def _ensure_knowledge_point_exists(knowledge_point_id: int) -> None:
+    rows = await _query_raw(
+        "SELECT id FROM knowledge_points WHERE id = $1 LIMIT 1",
+        [knowledge_point_id],
+    )
+    if not rows:
+        raise ValueError(
+            f"Knowledge point not found: kp_id={knowledge_point_id}. "
+            "Please create/select a valid knowledge point first."
+        )
+
+
 async def save_extraction_to_db(extraction: BookPageExtraction, kp_id: str) -> None:
     started = time.perf_counter()
     knowledge_point_id = int(kp_id)
@@ -151,6 +180,7 @@ async def save_extraction_to_db(extraction: BookPageExtraction, kp_id: str) -> N
     )
 
     await connect_prisma()
+    await _ensure_knowledge_point_exists(knowledge_point_id)
     api_key, key_id = await _resolve_gemini_api_key()
     gemini_client = genai.Client(api_key=api_key)
     logger.info(

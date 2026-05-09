@@ -24,11 +24,11 @@ class SyncTasksResponse(BaseModel):
 
 
 class RetryTaskRequest(BaseModel):
-    kp_id: str = "1"
+    kp_id: str = Field(..., description="Knowledge point ID")
 
 
 class UpdateTaskRequest(BaseModel):
-    kp_id: str = "1"
+    kp_id: str = Field(..., description="Knowledge point ID")
     json_result: BookPageExtraction
     status: str = Field(default="DONE")
 
