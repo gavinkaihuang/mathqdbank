@@ -8,6 +8,8 @@ from app.schemas.tasks import (
     ExtractionTaskResponse,
     RetryTaskRequest,
     SyncTasksResponse,
+    TagTaskRequest,
+    TagTaskResponse,
     UpdateTaskRequest,
 )
 from app.services import tasks as task_service
@@ -43,6 +45,21 @@ async def retry_task(task_id: int, payload: RetryTaskRequest) -> dict[str, Any]:
         return await task_service.retry_task(task_id=task_id, kp_id=payload.kp_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/tag", response_model=TagTaskResponse)
+async def auto_tag_task(task_id: int, payload: TagTaskRequest) -> TagTaskResponse:
+    try:
+        result = await task_service.auto_tag_task(
+            task_id=task_id,
+            fallback_kp_id=payload.fallback_kp_id,
+            source=payload.source,
+        )
+        return TagTaskResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 

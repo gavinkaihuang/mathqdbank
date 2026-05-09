@@ -33,6 +33,20 @@ class UpdateTaskRequest(BaseModel):
     status: str = Field(default="DONE")
 
 
+class TagTaskRequest(BaseModel):
+    fallback_kp_id: str | None = Field(default=None, description="Fallback knowledge point ID")
+    source: str | None = Field(default="sh_math", description="Source filter for knowledge points")
+
+
+class TagTaskResponse(BaseModel):
+    task_id: int
+    knowledge_point_id: int
+    knowledge_point_title: str
+    knowledge_point_path: str | None = None
+    confidence: float
+    reason: str
+
+
 class DeleteTasksRequest(BaseModel):
     ids: list[int] = Field(default_factory=list)
 

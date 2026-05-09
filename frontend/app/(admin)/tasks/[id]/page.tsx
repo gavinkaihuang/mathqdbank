@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, RotateCcw, Save } from "lucide-react";
+import { Loader2, RotateCcw, Save, Tags } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -18,6 +18,15 @@ type Task = {
   json_result?: Record<string, unknown> | null;
   error_log?: string | null;
   updated_at: string;
+};
+
+type TagResult = {
+  task_id: number;
+  knowledge_point_id: number;
+  knowledge_point_title: string;
+  knowledge_point_path?: string | null;
+  confidence: number;
+  reason: string;
 };
 
 function toPreviewMarkdown(jsonText: string): string {
@@ -72,8 +81,10 @@ export default function TaskDetailPage() {
   const [kpId, setKpId] = useState("1");
   const [isLoading, setIsLoading] = useState(false);
   const [retryLoading, setRetryLoading] = useState(false);
+  const [tagLoading, setTagLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [error, setError] = useState("");
+  const [tagResult, setTagResult] = useState<TagResult | null>(null);
 
   const loadTask = async () => {
     setIsLoading(true);
@@ -119,6 +130,32 @@ export default function TaskDetailPage() {
       setError(err instanceof Error ? err.message : "重试失败");
     } finally {
       setRetryLoading(false);
+    }
+  };
+
+  const handleAutoTag = async () => {
+    setTagLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/tag`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fallback_kp_id: kpId || null,
+          source: "sh_math",
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as TagResult | { detail?: string };
+      if (!res.ok) {
+        throw new Error((data as { detail?: string }).detail ?? `自动打标失败 (HTTP ${res.status})`);
+      }
+      const matched = data as TagResult;
+      setTagResult(matched);
+      setKpId(String(matched.knowledge_point_id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "自动打标失败");
+    } finally {
+      setTagLoading(false);
     }
   };
 
@@ -169,6 +206,14 @@ export default function TaskDetailPage() {
             placeholder="kp_id"
           />
           <button
+            onClick={handleAutoTag}
+            disabled={tagLoading || isLoading}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+          >
+            {tagLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Tags className="h-4 w-4" />}
+            自动打标
+          </button>
+          <button
             onClick={handleRetry}
             disabled={retryLoading || isLoading}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
@@ -190,6 +235,18 @@ export default function TaskDetailPage() {
       {error ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
           {error}
+        </div>
+      ) : null}
+
+      {tagResult ? (
+        <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
+          <div className="font-medium">已自动匹配知识点</div>
+          <div>
+            kp_id={tagResult.knowledge_point_id} | {tagResult.knowledge_point_title}
+            {tagResult.knowledge_point_path ? ` (${tagResult.knowledge_point_path})` : ""}
+          </div>
+          <div>confidence={tagResult.confidence.toFixed(3)}</div>
+          {tagResult.reason ? <div>reason: {tagResult.reason}</div> : null}
         </div>
       ) : null}
 

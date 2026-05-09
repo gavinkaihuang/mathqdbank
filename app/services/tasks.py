@@ -5,6 +5,8 @@ import logging
 import time
 from typing import Any
 
+from google import genai
+from google.genai import types
 from prisma._raw_query import deserialize_raw_results
 
 from app.core.config import settings
@@ -12,10 +14,158 @@ from app.core.prisma_client import connect_prisma, prisma
 from app.models.parsing import BookPageExtraction
 from app.services.gemini_parser import parse_math_page
 from app.services.importer import save_extraction_to_db
+from app.services.key_manager import KeyRelayClient
 from app.services.minio_service import MinioService
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff"}
 logger = logging.getLogger(__name__)
+
+
+def _extract_key_and_id(key_data: dict[str, Any]) -> tuple[str, str | None]:
+    api_key = str(key_data.get("key") or key_data.get("apiKey") or "").strip()
+    key_id = str(key_data.get("keyId") or key_data.get("id") or "").strip() or None
+    if not api_key:
+        raise RuntimeError("Key relay returned empty Gemini API key")
+    return api_key, key_id
+
+
+async def _resolve_gemini_api_key() -> tuple[str, str | None]:
+    if settings.GEMINI_API_KEY.strip():
+        return settings.GEMINI_API_KEY.strip(), None
+    key_data = await KeyRelayClient().get_key(platform="Gemini")
+    return _extract_key_and_id(key_data)
+
+
+def _build_extraction_text(extraction: BookPageExtraction) -> str:
+    chunks: list[str] = []
+    for item in extraction.items:
+        if item.latex_content:
+            chunks.append(item.latex_content.strip())
+    for q in extraction.questions:
+        if q.body:
+            chunks.append(q.body.strip())
+        if q.solution:
+            chunks.append(q.solution.strip())
+    text = "\n".join(part for part in chunks if part)
+    return text[:8000]
+
+
+def _title_tokens(title: str) -> list[str]:
+    separators = ["、", "，", ",", "（", "）", "(", ")", "与", "和", "及", "·", " "]
+    tokens = [title]
+    for sep in separators:
+        next_tokens: list[str] = []
+        for token in tokens:
+            next_tokens.extend(token.split(sep))
+        tokens = next_tokens
+    normalized = [t.strip() for t in tokens if len(t.strip()) >= 2]
+    return list(dict.fromkeys(normalized))
+
+
+def _score_candidate(text: str, title: str, path: str | None) -> int:
+    score = 0
+    if title and title in text:
+        score += 100
+    for token in _title_tokens(title):
+        if token in text:
+            score += 10
+    if path:
+        tail = path.split(".")[-1]
+        if tail and tail in text:
+            score += 3
+    return score
+
+
+def _shortlist_candidates(
+    text: str,
+    candidates: list[dict[str, Any]],
+    *,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    if not candidates:
+        return []
+    ranked = sorted(
+        candidates,
+        key=lambda c: _score_candidate(
+            text,
+            str(c.get("title") or ""),
+            str(c.get("path") or "") or None,
+        ),
+        reverse=True,
+    )
+    return ranked[:limit]
+
+
+async def _llm_pick_knowledge_point(
+    text: str,
+    candidates: list[dict[str, Any]],
+    fallback_kp_id: int | None,
+) -> dict[str, Any]:
+    if not candidates:
+        raise ValueError("No knowledge point candidates available")
+
+    model_name = settings.MODEL_TIER_FLASH.strip() or settings.MODEL_TIER_PRO.strip()
+    if not model_name:
+        raise RuntimeError("MODEL_TIER_FLASH or MODEL_TIER_PRO is required")
+
+    candidate_lines = [
+        f"- id={int(c['id'])}; path={str(c.get('path') or '')}; title={str(c.get('title') or '')}"
+        for c in candidates
+    ]
+    fallback_hint = (
+        f"Fallback knowledge_point_id is {fallback_kp_id}. Use it only if confidence is very low."
+        if fallback_kp_id is not None
+        else "No fallback id provided."
+    )
+    system_prompt = (
+        "You are a strict knowledge-point classifier for Shanghai high school math. "
+        "Choose exactly one best candidate from the given list based on the extracted page text. "
+        "Do not invent ids. Output JSON only."
+    )
+    user_prompt = (
+        "Candidates:\n"
+        + "\n".join(candidate_lines)
+        + "\n\n"
+        + fallback_hint
+        + "\n\n"
+        + "Extracted page text:\n"
+        + text
+        + "\n\n"
+        + "Return JSON with fields: knowledge_point_id (int), confidence (0-1 float), reason (string)."
+    )
+
+    api_key, _ = await _resolve_gemini_api_key()
+    client = genai.Client(api_key=api_key)
+    response = await client.aio.models.generate_content(
+        model=model_name,
+        contents=types.Content(role="user", parts=[types.Part.from_text(text=user_prompt)]),
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            response_mime_type="application/json",
+        ),
+    )
+
+    raw = response.text or "{}"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Tagging model returned invalid JSON: {raw[:300]}") from exc
+
+    selected_id = int(parsed.get("knowledge_point_id"))
+    confidence = float(parsed.get("confidence", 0.0))
+    reason = str(parsed.get("reason") or "")
+    if selected_id not in {int(c["id"]) for c in candidates}:
+        if fallback_kp_id is not None and fallback_kp_id in {int(c["id"]) for c in candidates}:
+            selected_id = fallback_kp_id
+            reason = f"Model selected out-of-candidate id, fallback to {fallback_kp_id}."
+            confidence = min(confidence, 0.4)
+        else:
+            raise RuntimeError("Tagging model returned an id outside candidate list")
+    return {
+        "knowledge_point_id": selected_id,
+        "confidence": confidence,
+        "reason": reason,
+    }
 
 
 def _create_tubook_storage() -> MinioService:
@@ -324,3 +474,75 @@ async def delete_tasks(ids: list[int]) -> dict[str, int]:
             deleted += int(result.get("data", {}).get("result") or 0)
     logger.info("[TASKS] batch delete finished: requested=%s deleted=%s", len(ids), deleted)
     return {"deleted": deleted}
+
+
+async def auto_tag_task(task_id: int, fallback_kp_id: str | None = None, source: str | None = "sh_math") -> dict[str, Any]:
+    await connect_prisma()
+    started = time.perf_counter()
+    logger.info("[TASKS] auto_tag started: task_id=%s fallback_kp_id=%s source=%s", task_id, fallback_kp_id, source)
+
+    rows = await _query_raw(
+        (
+            "SELECT id, minio_path, json_result FROM extraction_tasks "
+            "WHERE id = $1 LIMIT 1"
+        ),
+        [task_id],
+    )
+    if not rows:
+        raise ValueError("Task not found")
+
+    task_row = rows[0]
+    json_result = task_row.get("json_result")
+    if not isinstance(json_result, dict):
+        raise ValueError("Task has no json_result. Please run parsing first.")
+
+    extraction = BookPageExtraction.model_validate(json_result)
+    text = _build_extraction_text(extraction)
+    if not text.strip():
+        raise ValueError("Task json_result has no usable text for tagging")
+
+    source_filter_sql = ""
+    params: list[Any] = []
+    if source and source.strip():
+        source_filter_sql = " AND source = $1"
+        params.append(source.strip())
+
+    candidates = await _query_raw(
+        (
+            "SELECT id, title, path FROM knowledge_points "
+            "WHERE COALESCE(is_leaf, true) = true"
+            + source_filter_sql
+            + " ORDER BY id ASC"
+        ),
+        params,
+    )
+    if not candidates:
+        raise ValueError("No knowledge points available for tagging")
+
+    shortlist = _shortlist_candidates(text, candidates, limit=20)
+    fallback_id = int(fallback_kp_id) if fallback_kp_id and fallback_kp_id.strip() else None
+    selected = await _llm_pick_knowledge_point(text, shortlist, fallback_id)
+
+    selected_row = next((c for c in shortlist if int(c["id"]) == int(selected["knowledge_point_id"])), None)
+    if selected_row is None:
+        selected_row = next((c for c in candidates if int(c["id"]) == int(selected["knowledge_point_id"])), None)
+    if selected_row is None:
+        raise RuntimeError("Selected knowledge point cannot be resolved")
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    logger.info(
+        "[TASKS] auto_tag finished: task_id=%s selected_kp_id=%s confidence=%.3f elapsed_ms=%s",
+        task_id,
+        int(selected_row["id"]),
+        float(selected["confidence"]),
+        elapsed_ms,
+    )
+
+    return {
+        "task_id": task_id,
+        "knowledge_point_id": int(selected_row["id"]),
+        "knowledge_point_title": str(selected_row.get("title") or ""),
+        "knowledge_point_path": str(selected_row.get("path") or "") or None,
+        "confidence": float(selected["confidence"]),
+        "reason": str(selected.get("reason") or ""),
+    }
