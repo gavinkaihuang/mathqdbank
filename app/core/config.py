@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     LLM_DEBUG_MAX_TEXT_CHARS: int = 3000
     KEY_RELAY_BASE_URL: str
     KEY_RELAY_TOKEN: str
+    KEYRELAY_EXTERNAL_API_TOKEN: str = ""
+    CALLBACK_SECRET: str = ""
     PROJECT_NAME: str = "mathqbank"
 
     # MinIO Configuration (loaded from .env)
