@@ -3,11 +3,14 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.schemas.tasks import (
+    BatchToggleIgnoreRequest,
+    BatchToggleIgnoreResponse,
     DeleteTasksRequest,
     DeleteTasksResponse,
     ExtractionTaskResponse,
     RetryTaskRequest,
     SyncTasksResponse,
+    ToggleIgnoreRequest,
     TagTaskRequest,
     TagTaskResponse,
     UpdateTaskRequest,
@@ -44,7 +47,9 @@ async def retry_task(task_id: int, payload: RetryTaskRequest) -> dict[str, Any]:
     try:
         return await task_service.retry_task(task_id=task_id, kp_id=payload.kp_id)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        detail = str(exc)
+        status_code = status.HTTP_404_NOT_FOUND if detail == "Task not found" else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=detail) from exc
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
@@ -74,7 +79,28 @@ async def update_task(task_id: int, payload: UpdateTaskRequest) -> dict[str, Any
             status=payload.status,
         )
     except ValueError as exc:
+        detail = str(exc)
+        status_code = status.HTTP_404_NOT_FOUND if detail == "Task not found" else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/ignore")
+async def toggle_ignore_task(task_id: int, payload: ToggleIgnoreRequest) -> dict[str, Any]:
+    try:
+        return await task_service.set_task_ignore(task_id=task_id, ignore=payload.ignore)
+    except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.post("/ignore-batch", response_model=BatchToggleIgnoreResponse)
+async def toggle_ignore_tasks(payload: BatchToggleIgnoreRequest) -> BatchToggleIgnoreResponse:
+    try:
+        result = await task_service.set_tasks_ignore(payload.ids, payload.ignore)
+        return BatchToggleIgnoreResponse(**result)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 

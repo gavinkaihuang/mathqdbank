@@ -11,6 +11,8 @@ class ExtractionTaskResponse(BaseModel):
     minio_path: str
     image_url: str | None = None
     image_presigned_url: str | None = None
+    is_ignored: bool = False
+    ignored_at: datetime | None = None
     status: str
     json_result: dict[str, Any] | None = None
     error_log: str | None = None
@@ -53,3 +55,16 @@ class DeleteTasksRequest(BaseModel):
 
 class DeleteTasksResponse(BaseModel):
     deleted: int
+
+
+class ToggleIgnoreRequest(BaseModel):
+    ignore: bool = Field(..., description="Set true to ignore the task, false to enable it")
+
+
+class BatchToggleIgnoreRequest(BaseModel):
+    ids: list[int] = Field(default_factory=list)
+    ignore: bool = Field(..., description="Set true to ignore selected tasks, false to enable")
+
+
+class BatchToggleIgnoreResponse(BaseModel):
+    updated: int

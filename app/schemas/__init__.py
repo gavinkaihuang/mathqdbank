@@ -26,11 +26,14 @@ from app.schemas.domain import (
 )
 from app.schemas.pagination import PageResponse
 from app.schemas.tasks import (
+	BatchToggleIgnoreRequest,
+	BatchToggleIgnoreResponse,
 	DeleteTasksRequest,
 	DeleteTasksResponse,
 	ExtractionTaskResponse,
 	RetryTaskRequest,
 	SyncTasksResponse,
+	ToggleIgnoreRequest,
 	UpdateTaskRequest,
 )
 
@@ -62,6 +65,9 @@ __all__ = [
 	"SyncTasksResponse",
 	"RetryTaskRequest",
 	"UpdateTaskRequest",
+	"ToggleIgnoreRequest",
+	"BatchToggleIgnoreRequest",
+	"BatchToggleIgnoreResponse",
 	"DeleteTasksRequest",
 	"DeleteTasksResponse",
 ]

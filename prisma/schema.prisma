@@ -72,6 +72,8 @@ model Question {
 model ExtractionTask {
   id         Int      @id @default(autoincrement())
   minio_path String   @unique
+  is_ignored Boolean  @default(false)
+  ignored_at DateTime?
   status     String   @default("PENDING")
   json_result Json?
   error_log  String?

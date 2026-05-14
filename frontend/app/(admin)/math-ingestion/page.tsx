@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, RotateCcw, Save, SkipForward, RefreshCcw, Trash2 } from "lucide-react";
+import { Loader2, Maximize2, Minimize2, RefreshCcw, RotateCcw, Save, SkipForward } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -13,6 +13,8 @@ type Task = {
   minio_path: string;
   image_url?: string | null;
   image_presigned_url?: string | null;
+  is_ignored?: boolean;
+  ignored_at?: string | null;
   status: string;
   json_result?: Record<string, unknown> | null;
   error_log?: string | null;
@@ -78,13 +80,17 @@ export default function MathIngestionPage() {
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const [updatingIgnore, setUpdatingIgnore] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [currentPage, setCurrentPage] = useState(1);
   const [runningAction, setRunningAction] = useState<"retry" | "save" | "skip" | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [focusPane, setFocusPane] = useState<"split" | "image" | "text">("split");
+  const [imageZoomIndex, setImageZoomIndex] = useState(0);
   const [error, setError] = useState("");
   const pageSize = 40;
+  const zoomLevels = [100, 125, 150, 200, 300];
 
   const fetchList = async () => {
     setLoadingList(true);
@@ -152,6 +158,10 @@ export default function MathIngestionPage() {
 
   const handleRetry = async () => {
     if (!selectedTask) return;
+    if (selectedTask.is_ignored) {
+      setError("当前任务处于“忽略”状态，不能重新解析。");
+      return;
+    }
     setRunningAction("retry");
     setError("");
     try {
@@ -190,57 +200,56 @@ export default function MathIngestionPage() {
     }
   };
 
-  const handleDeleteOne = async (taskId: number) => {
-    setDeleting(true);
+  const handleToggleIgnoreOne = async (taskId: number, ignore: boolean) => {
+    setUpdatingIgnore(true);
     setError("");
     try {
-      const res = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
+      const res = await fetch(`/api/tasks/${taskId}/ignore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ignore }),
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data?.detail ?? `删除失败 (HTTP ${res.status})`);
+        throw new Error(data?.detail ?? `${ignore ? "忽略" : "启用"}失败 (HTTP ${res.status})`);
       }
-
-      if (selectedId === taskId) {
-        setSelectedId(null);
-        setSelectedTask(null);
-      }
-      setSelectedIds((prev) => prev.filter((id) => id !== taskId));
       await fetchList();
+      if (selectedId === taskId) {
+        await fetchDetail(taskId);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "删除失败");
+      setError(err instanceof Error ? err.message : `${ignore ? "忽略" : "启用"}失败`);
     } finally {
-      setDeleting(false);
+      setUpdatingIgnore(false);
     }
   };
 
-  const handleDeleteSelected = async () => {
+  const handleToggleIgnoreSelected = async (ignore: boolean) => {
     if (selectedIds.length === 0) {
       return;
     }
 
-    setDeleting(true);
+    setUpdatingIgnore(true);
     setError("");
     try {
-      const res = await fetch("/api/tasks/delete-batch", {
+      const res = await fetch("/api/tasks/ignore-batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: selectedIds }),
+        body: JSON.stringify({ ids: selectedIds, ignore }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data?.detail ?? `批量删除失败 (HTTP ${res.status})`);
+        throw new Error(data?.detail ?? `批量${ignore ? "忽略" : "启用"}失败 (HTTP ${res.status})`);
       }
 
       if (selectedId && selectedIds.includes(selectedId)) {
-        setSelectedId(null);
-        setSelectedTask(null);
+        await fetchDetail(selectedId);
       }
-      setSelectedIds([]);
       await fetchList();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "批量删除失败");
+      setError(err instanceof Error ? err.message : `批量${ignore ? "忽略" : "启用"}失败`);
     } finally {
-      setDeleting(false);
+      setUpdatingIgnore(false);
     }
   };
 
@@ -284,6 +293,10 @@ export default function MathIngestionPage() {
 
   const handleSave = async () => {
     if (!selectedTask) return;
+    if (selectedTask.is_ignored) {
+      setError("当前任务处于“忽略”状态，不能保存入库。");
+      return;
+    }
     setRunningAction("save");
     setError("");
     try {
@@ -340,6 +353,201 @@ export default function MathIngestionPage() {
 
   const previewMarkdown = useMemo(() => buildPreviewFromJson(jsonText), [jsonText]);
 
+  const showImagePane = focusPane !== "text";
+  const showTextPane = focusPane !== "image";
+  const zoomWidthClassMap: Record<number, string> = {
+    100: "w-full",
+    125: "w-[125%]",
+    150: "w-[150%]",
+    200: "w-[200%]",
+    300: "w-[300%]",
+  };
+  const currentZoom = zoomLevels[imageZoomIndex] ?? 100;
+  const imageWidthClass = zoomWidthClassMap[currentZoom] ?? "w-full";
+
+  useEffect(() => {
+    if (!isFullscreen) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsFullscreen(false);
+      }
+    };
+
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    setImageZoomIndex(0);
+  }, [selectedTask?.id]);
+
+  const renderDetailWorkspace = (fullscreen: boolean) => {
+    if (!selectedTask) {
+      return null;
+    }
+    const isTaskIgnored = Boolean(selectedTask.is_ignored);
+
+    const imageHeightClass = fullscreen ? "h-[calc(100vh-240px)]" : "h-[calc(100vh-330px)]";
+    const editorHeightClass = fullscreen ? "h-[44vh]" : "h-[36vh]";
+    const previewHeightClass = fullscreen ? "h-[calc(100vh-520px)]" : "h-[calc(100vh-620px)]";
+    const gridClass = showImagePane && showTextPane
+      ? "grid-cols-1 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]"
+      : "grid-cols-1";
+
+    return (
+      <div className={`grid gap-4 ${gridClass}`}>
+        {showImagePane ? (
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-100 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">MinIO 图片（预签名 URL）</p>
+                  <p className="mt-1 text-xs text-slate-500">数据库ID: {selectedTask.id}</p>
+                  <p className="truncate text-xs text-slate-600">图片名: {selectedTask.minio_path}</p>
+                </div>
+                <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1">
+                  <button
+                    onClick={() => setImageZoomIndex((prev) => Math.max(0, prev - 1))}
+                    disabled={imageZoomIndex === 0}
+                    className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    缩小
+                  </button>
+                  <span className="min-w-[56px] text-center text-xs font-semibold text-slate-700">{currentZoom}%</span>
+                  <button
+                    onClick={() => setImageZoomIndex((prev) => Math.min(zoomLevels.length - 1, prev + 1))}
+                    disabled={imageZoomIndex >= zoomLevels.length - 1}
+                    className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    放大
+                  </button>
+                  <button
+                    onClick={() => setImageZoomIndex(0)}
+                    className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                  >
+                    重置
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className={`min-h-[460px] overflow-auto bg-slate-100 ${imageHeightClass}`}>
+              {selectedTask.image_presigned_url || selectedTask.image_url ? (
+                <div
+                  className={`flex min-h-full min-w-full p-3 ${currentZoom === 100 ? "items-center justify-center" : "items-start justify-start"}`}
+                >
+                  <Image
+                    src={selectedTask.image_presigned_url || selectedTask.image_url || ""}
+                    alt={selectedTask.minio_path}
+                    width={1600}
+                    height={2200}
+                    unoptimized
+                    className={`h-auto max-w-none rounded-md bg-white shadow ${imageWidthClass}`}
+                  />
+                </div>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                  无图片可预览
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {showTextPane ? (
+          <div className="space-y-4">
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+                <span className="text-sm font-semibold text-slate-800">JSON 编辑器</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    value={kpId}
+                    onChange={(e) => setKpId(e.target.value)}
+                    placeholder="kp_id"
+                    className="w-20 rounded-md border border-slate-200 px-2 py-1 text-xs"
+                  />
+                  <select
+                    aria-label="任务状态"
+                    value={status}
+                    onChange={(e) => setStatus(e.target.value)}
+                    className="rounded-md border border-slate-200 px-2 py-1 text-xs"
+                  >
+                    <option value="PENDING">PENDING</option>
+                    <option value="PROCESSING">PROCESSING</option>
+                    <option value="DONE">DONE</option>
+                    <option value="FAILED">FAILED</option>
+                    <option value="SKIPPED">SKIPPED</option>
+                  </select>
+                </div>
+              </div>
+
+              {isTaskIgnored ? (
+                <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-700">
+                  当前图片已忽略，AI OCR 操作已禁用（重新解析、保存并入库不可用）。
+                </div>
+              ) : null}
+
+              <textarea
+                aria-label="识别 JSON 编辑器"
+                value={jsonText}
+                onChange={(e) => setJsonText(e.target.value)}
+                className={`w-full resize-none bg-slate-950 p-3 font-mono text-xs text-slate-100 outline-none ${editorHeightClass}`}
+              />
+
+              <div className="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-3">
+                <button
+                  onClick={handleRetry}
+                  disabled={runningAction !== null || isTaskIgnored}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  {runningAction === "retry" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                  重新解析
+                </button>
+                <button
+                  onClick={handleSave}
+                  disabled={runningAction !== null || isTaskIgnored}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-60"
+                >
+                  {runningAction === "save" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  保存并入库
+                </button>
+                <button
+                  onClick={handleSkip}
+                  disabled={runningAction !== null}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-60"
+                >
+                  {runningAction === "skip" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <SkipForward className="h-3.5 w-3.5" />}
+                  跳过此页
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-800">
+                LaTeX 实时预览
+              </div>
+              <div
+                className={`prose prose-slate max-w-none min-h-[220px] overflow-auto px-4 py-3 text-sm [&_.katex-display]:overflow-x-auto ${previewHeightClass}`}
+              >
+                <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                  {previewMarkdown}
+                </ReactMarkdown>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   return (
     <div className="grid h-full grid-cols-1 gap-4 p-6 xl:grid-cols-[380px_minmax(0,1fr)]">
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -353,12 +561,20 @@ export default function MathIngestionPage() {
               名字{sortOrder === "asc" ? "升序" : "降序"}
             </button>
             <button
-              onClick={handleDeleteSelected}
-              disabled={selectedIds.length === 0 || deleting}
-              className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+              onClick={() => void handleToggleIgnoreSelected(true)}
+              disabled={selectedIds.length === 0 || updatingIgnore}
+              className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700 hover:bg-amber-100 disabled:opacity-50"
             >
-              {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-              删除选中
+              {updatingIgnore ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+              忽略选中
+            </button>
+            <button
+              onClick={() => void handleToggleIgnoreSelected(false)}
+              disabled={selectedIds.length === 0 || updatingIgnore}
+              className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+            >
+              {updatingIgnore ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+              启用选中
             </button>
             <button
               onClick={handleSync}
@@ -404,6 +620,7 @@ export default function MathIngestionPage() {
                 const isFailed = task.status === "FAILED";
                 const active = selectedId === task.id;
                 const checked = selectedIds.includes(task.id);
+                const isIgnored = Boolean(task.is_ignored);
                 return (
                   <div
                     key={task.id}
@@ -411,7 +628,7 @@ export default function MathIngestionPage() {
                       active
                         ? "border-l-4 border-l-sky-500 bg-sky-50/70 shadow-[inset_0_0_0_1px_rgba(14,165,233,0.25)]"
                         : "hover:bg-slate-50"
-                    } ${isFailed ? "bg-rose-50/70" : ""}`}
+                    } ${isFailed ? "bg-rose-50/70" : ""} ${isIgnored ? "opacity-70" : ""}`}
                   >
                     <div className="mb-2 flex items-start justify-between gap-2">
                       <label className="inline-flex cursor-pointer items-center gap-2">
@@ -430,6 +647,11 @@ export default function MathIngestionPage() {
                       </label>
 
                       <div className="flex items-center gap-1">
+                        {isIgnored ? (
+                          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                            已忽略
+                          </span>
+                        ) : null}
                         <span
                           className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
                             STATUS_STYLE[task.status] ?? "bg-slate-100 text-slate-700 border-slate-200"
@@ -438,20 +660,20 @@ export default function MathIngestionPage() {
                           {task.status}
                         </span>
                         <button
-                          onClick={() => void handleDeleteOne(task.id)}
-                          disabled={deleting}
-                          className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                          onClick={() => void handleToggleIgnoreOne(task.id, !isIgnored)}
+                          disabled={updatingIgnore}
+                          className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold disabled:opacity-60 ${
+                            isIgnored
+                              ? "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                              : "border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                          }`}
                         >
-                          <Trash2 className="h-3 w-3" />
-                          删除
+                          {isIgnored ? "启用" : "忽略"}
                         </button>
                       </div>
                     </div>
 
-                    <button
-                      onClick={() => setSelectedId(task.id)}
-                      className="w-full text-left"
-                    >
+                    <button onClick={() => setSelectedId(task.id)} className="w-full text-left">
                       <p className={`truncate text-xs ${active ? "font-semibold text-sky-800" : "text-slate-600"}`}>
                         {task.minio_path}
                       </p>
@@ -506,103 +728,70 @@ export default function MathIngestionPage() {
             <p className="text-xs text-slate-400">点击左上“同步”从 MinIO 拉取图片任务，或在“解析任务”页面先同步。</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <div className="border-b border-slate-100 px-4 py-3">
-                <p className="text-sm font-semibold text-slate-800">MinIO 图片（预签名 URL）</p>
-                <p className="mt-1 text-xs text-slate-500">数据库ID: {selectedTask.id}</p>
-                <p className="truncate text-xs text-slate-600">图片名: {selectedTask.minio_path}</p>
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <div className="text-xs text-slate-600">
+                校验视图：可切换分栏/单栏；全屏模式下按 ESC 可退出
               </div>
-              <div className="relative h-[560px] bg-slate-100">
-                {selectedTask.image_presigned_url || selectedTask.image_url ? (
-                  <Image
-                    src={selectedTask.image_presigned_url || selectedTask.image_url || ""}
-                    alt={selectedTask.minio_path}
-                    fill
-                    unoptimized
-                    className="object-contain"
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                    无图片可预览
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
-                  <span className="text-sm font-semibold text-slate-800">JSON 编辑器</span>
-                  <div className="flex items-center gap-2">
-                    <input
-                      value={kpId}
-                      onChange={(e) => setKpId(e.target.value)}
-                      placeholder="kp_id"
-                      className="w-20 rounded-md border border-slate-200 px-2 py-1 text-xs"
-                    />
-                    <select
-                      aria-label="任务状态"
-                      value={status}
-                      onChange={(e) => setStatus(e.target.value)}
-                      className="rounded-md border border-slate-200 px-2 py-1 text-xs"
-                    >
-                      <option value="PENDING">PENDING</option>
-                      <option value="PROCESSING">PROCESSING</option>
-                      <option value="DONE">DONE</option>
-                      <option value="FAILED">FAILED</option>
-                      <option value="SKIPPED">SKIPPED</option>
-                    </select>
-                  </div>
-                </div>
-
-                <textarea
-                  aria-label="识别 JSON 编辑器"
-                  value={jsonText}
-                  onChange={(e) => setJsonText(e.target.value)}
-                  className="h-[300px] w-full resize-none bg-slate-950 p-3 font-mono text-xs text-slate-100 outline-none"
-                />
-
-                <div className="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-3">
-                  <button
-                    onClick={handleRetry}
-                    disabled={runningAction !== null}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                  >
-                    {runningAction === "retry" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-                    重新解析
-                  </button>
-                  <button
-                    onClick={handleSave}
-                    disabled={runningAction !== null}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-60"
-                  >
-                    {runningAction === "save" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                    保存并入库
-                  </button>
-                  <button
-                    onClick={handleSkip}
-                    disabled={runningAction !== null}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-60"
-                  >
-                    {runningAction === "skip" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <SkipForward className="h-3.5 w-3.5" />}
-                    跳过此页
-                  </button>
-                </div>
-              </div>
-
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <div className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-800">
-                  LaTeX 实时预览
-                </div>
-                <div className="prose prose-slate max-w-none px-4 py-3 text-sm [&_.katex-display]:overflow-x-auto">
-                  <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                    {previewMarkdown}
-                  </ReactMarkdown>
-                </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => setFocusPane("split")}
+                  className={`rounded-md border px-2 py-1 text-xs ${
+                    focusPane === "split"
+                      ? "border-sky-300 bg-sky-50 text-sky-700"
+                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  分栏
+                </button>
+                <button
+                  onClick={() => setFocusPane("image")}
+                  className={`rounded-md border px-2 py-1 text-xs ${
+                    focusPane === "image"
+                      ? "border-sky-300 bg-sky-50 text-sky-700"
+                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  仅图片
+                </button>
+                <button
+                  onClick={() => setFocusPane("text")}
+                  className={`rounded-md border px-2 py-1 text-xs ${
+                    focusPane === "text"
+                      ? "border-sky-300 bg-sky-50 text-sky-700"
+                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  仅文字
+                </button>
+                <button
+                  onClick={() => setIsFullscreen((prev) => !prev)}
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                >
+                  {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+                  {isFullscreen ? "退出全屏" : "全屏校验"}
+                </button>
               </div>
             </div>
-          </div>
+
+            {!isFullscreen ? renderDetailWorkspace(false) : null}
+
+            {isFullscreen ? (
+              <div className="fixed inset-3 z-50 overflow-auto rounded-2xl border border-slate-300 bg-slate-50 p-4 shadow-2xl">
+                <div className="mb-3 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-sm font-semibold text-slate-800">全屏校验模式</p>
+                  <button
+                    onClick={() => setIsFullscreen(false)}
+                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                  >
+                    <Minimize2 className="h-3.5 w-3.5" />
+                    退出全屏
+                  </button>
+                </div>
+                {renderDetailWorkspace(true)}
+              </div>
+            ) : null}
+          </>
         )}
       </section>
     </div>

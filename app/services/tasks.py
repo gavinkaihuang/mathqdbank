@@ -226,7 +226,7 @@ async def list_tasks(status: str | None = None) -> list[dict[str, Any]]:
     if status:
         rows = await _query_raw(
             (
-                "SELECT id, minio_path, status, json_result, error_log, updated_at "
+                "SELECT id, minio_path, is_ignored, ignored_at, status, json_result, error_log, updated_at "
                 "FROM extraction_tasks WHERE status = $1 ORDER BY id DESC"
             ),
             [status],
@@ -236,7 +236,7 @@ async def list_tasks(status: str | None = None) -> list[dict[str, Any]]:
 
     rows = await _query_raw(
         (
-            "SELECT id, minio_path, status, json_result, error_log, updated_at "
+            "SELECT id, minio_path, is_ignored, ignored_at, status, json_result, error_log, updated_at "
             "FROM extraction_tasks ORDER BY id DESC"
         ),
         [],
@@ -250,7 +250,7 @@ async def get_task(task_id: int) -> dict[str, Any]:
     logger.info("[TASKS] get started: task_id=%s", task_id)
     rows = await _query_raw(
         (
-            "SELECT id, minio_path, status, json_result, error_log, updated_at "
+            "SELECT id, minio_path, is_ignored, ignored_at, status, json_result, error_log, updated_at "
             "FROM extraction_tasks WHERE id = $1 LIMIT 1"
         ),
         [task_id],
@@ -321,7 +321,7 @@ async def retry_task(task_id: int, kp_id: str) -> dict[str, Any]:
 
     rows = await _query_raw(
         (
-            "SELECT id, minio_path FROM extraction_tasks "
+            "SELECT id, minio_path, COALESCE(is_ignored, false) AS is_ignored FROM extraction_tasks "
             "WHERE id = $1 LIMIT 1"
         ),
         [task_id],
@@ -331,6 +331,10 @@ async def retry_task(task_id: int, kp_id: str) -> dict[str, Any]:
         raise ValueError("Task not found")
 
     minio_path = str(rows[0]["minio_path"])
+    if bool(rows[0].get("is_ignored")):
+        logger.warning("[TASKS] retry ignored task blocked: task_id=%s", task_id)
+        raise ValueError("Task is ignored and cannot be retried")
+
     storage = _create_tubook_storage()
     logger.info(
         "[TASKS] retry task resolved: task_id=%s minio_path=%s bucket=%s",
@@ -404,7 +408,7 @@ async def update_task_result(task_id: int, extraction: BookPageExtraction, kp_id
 
     rows = await _query_raw(
         (
-            "SELECT id, minio_path FROM extraction_tasks "
+            "SELECT id, minio_path, COALESCE(is_ignored, false) AS is_ignored FROM extraction_tasks "
             "WHERE id = $1 LIMIT 1"
         ),
         [task_id],
@@ -412,6 +416,10 @@ async def update_task_result(task_id: int, extraction: BookPageExtraction, kp_id
     if not rows:
         logger.warning("[TASKS] update task not found: task_id=%s", task_id)
         raise ValueError("Task not found")
+
+    if bool(rows[0].get("is_ignored")):
+        logger.warning("[TASKS] update blocked for ignored task: task_id=%s", task_id)
+        raise ValueError("Task is ignored and cannot be saved")
 
     await save_extraction_to_db(extraction, kp_id)
 
@@ -546,3 +554,87 @@ async def auto_tag_task(task_id: int, fallback_kp_id: str | None = None, source:
         "confidence": float(selected["confidence"]),
         "reason": str(selected.get("reason") or ""),
     }
+
+
+async def set_task_ignore(task_id: int, ignore: bool) -> dict[str, Any]:
+    await connect_prisma()
+    logger.info("[TASKS] set_ignore started: task_id=%s ignore=%s", task_id, ignore)
+
+    rows = await _query_raw(
+        "SELECT id, minio_path FROM extraction_tasks WHERE id = $1 LIMIT 1",
+        [task_id],
+    )
+    if not rows:
+        logger.warning("[TASKS] set_ignore task not found: task_id=%s", task_id)
+        raise ValueError("Task not found")
+
+    if ignore:
+        await _execute_raw(
+            (
+                "UPDATE extraction_tasks "
+                "SET is_ignored = true, ignored_at = NOW(), "
+                "status = CASE "
+                "WHEN status IN ('PENDING', 'PROCESSING', 'FAILED') THEN 'SKIPPED' "
+                "ELSE status END "
+                "WHERE id = $1"
+            ),
+            [task_id],
+        )
+    else:
+        await _execute_raw(
+            (
+                "UPDATE extraction_tasks "
+                "SET is_ignored = false, ignored_at = NULL, "
+                "status = CASE "
+                "WHEN status = 'SKIPPED' AND json_result IS NULL THEN 'PENDING' "
+                "ELSE status END "
+                "WHERE id = $1"
+            ),
+            [task_id],
+        )
+
+    logger.info("[TASKS] set_ignore finished: task_id=%s ignore=%s", task_id, ignore)
+    return {
+        "id": task_id,
+        "minio_path": str(rows[0]["minio_path"]),
+        "is_ignored": ignore,
+    }
+
+
+async def set_tasks_ignore(ids: list[int], ignore: bool) -> dict[str, int]:
+    await connect_prisma()
+    logger.info("[TASKS] batch set_ignore started: requested=%s ignore=%s", len(ids), ignore)
+    if not ids:
+        return {"updated": 0}
+
+    updated = 0
+    for task_id in ids:
+        if ignore:
+            result = await _execute_raw(
+                (
+                    "UPDATE extraction_tasks "
+                    "SET is_ignored = true, ignored_at = NOW(), "
+                    "status = CASE "
+                    "WHEN status IN ('PENDING', 'PROCESSING', 'FAILED') THEN 'SKIPPED' "
+                    "ELSE status END "
+                    "WHERE id = $1"
+                ),
+                [task_id],
+            )
+        else:
+            result = await _execute_raw(
+                (
+                    "UPDATE extraction_tasks "
+                    "SET is_ignored = false, ignored_at = NULL, "
+                    "status = CASE "
+                    "WHEN status = 'SKIPPED' AND json_result IS NULL THEN 'PENDING' "
+                    "ELSE status END "
+                    "WHERE id = $1"
+                ),
+                [task_id],
+            )
+        if isinstance(result, dict):
+            updated += int(result.get("data", {}).get("result") or 0)
+
+    logger.info("[TASKS] batch set_ignore finished: requested=%s updated=%s", len(ids), updated)
+    return {"updated": updated}
